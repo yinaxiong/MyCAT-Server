@@ -135,10 +135,12 @@ public final class NIOConnector implements
 	}
 
 	private NIOProcessor nextProcessor() {
-		if (++nextProcessor == processors.length) {
+		int inx = ++nextProcessor;
+		if (inx >= processors.length) {
 			nextProcessor = 0;
+			inx = 0;
 		}
-		return processors[nextProcessor];
+		return processors[inx];
 	}
 
 	/**
