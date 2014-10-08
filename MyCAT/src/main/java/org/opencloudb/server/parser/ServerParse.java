@@ -50,6 +50,7 @@ public final class ServerParse {
 	public static final int HELP = 17;
 	public static final int MYSQL_CMD_COMMENT = 18;
 	public static final int MYSQL_COMMENT = 19;
+	public static final int CALL = 20;
 
 	public static int parse(String stmt) {
 		int lenth=stmt.length();
@@ -78,7 +79,7 @@ public final class ServerParse {
 				return beginCheck(stmt, i);
 			case 'C':
 			case 'c':
-				return commitCheck(stmt, i);
+				return commitOrCallCheck(stmt, i);
 			case 'D':
 			case 'd':
 				return deleteCheck(stmt, i);
@@ -220,7 +221,7 @@ public final class ServerParse {
 		}
 		return OTHER;
 	}
-
+	
 	// COMMIT
 	static int commitCheck(String stmt, int offset) {
 		if (stmt.length() > offset + 5) {
@@ -239,7 +240,41 @@ public final class ServerParse {
 				return COMMIT;
 			}
 		}
+		
 		return OTHER;
+	}
+	
+	//CALL
+	static int callCheck(String stmt, int  offset) {
+		if (stmt.length() > offset + 3) {
+			char c1 = stmt.charAt(++offset);
+			char c2 = stmt.charAt(++offset);
+			char c3 = stmt.charAt(++offset);
+			if ((c1 == 'A' || c1 == 'a')
+					&& (c2 == 'L' || c2 == 'l')
+					&& (c3 == 'L' || c3 == 'l')) {
+				return CALL;
+			}
+		}
+		
+		return OTHER;
+	}
+
+	static int commitOrCallCheck(String stmt, int offset) {
+		int sqlType = OTHER;
+		switch ( stmt.charAt((offset+1)) ) {
+		case 'O':
+		case 'o':
+			sqlType = commitCheck(stmt, offset);
+			break;
+		case 'A':
+		case 'a':
+			sqlType = callCheck(stmt,  offset);
+			break;
+		default:
+			sqlType = OTHER;
+		}
+		return sqlType;
 	}
 
 	// DELETE' '

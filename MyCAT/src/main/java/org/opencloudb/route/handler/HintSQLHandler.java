@@ -3,13 +3,10 @@ package org.opencloudb.route.handler;
 import org.opencloudb.cache.LayerCachePool;
 import org.opencloudb.config.model.SchemaConfig;
 import org.opencloudb.config.model.SystemConfig;
-import org.opencloudb.parser.SQLParserDelegate;
 import org.opencloudb.route.RouteResultset;
 import org.opencloudb.route.RouteResultsetNode;
 import org.opencloudb.route.ServerRouterUtil;
-
-import com.foundationdb.sql.parser.NodeTypes;
-import com.foundationdb.sql.parser.QueryTreeNode;
+import org.opencloudb.server.parser.ServerParse;
 
 import java.sql.SQLNonTransientException;
 
@@ -37,12 +34,13 @@ public class HintSQLHandler implements HintHandler {
         }
         rrs.setNodes(newRrsNodes);
         
-        //判断是否为调用存储过程的SQL语句
-     	QueryTreeNode ast = SQLParserDelegate.parse(realSQL, charset == null ? "utf-8" : charset);
-     	if (ast.getNodeType() == NodeTypes.CALL_STATEMENT_NODE)
-     	{
-     		rrs.setCallStatement(true);
-     	}
+        //判断是否为调用存储过程的SQL语句，这里不能用SQL解析器来解析判断是否为CALL语句 
+        int rs = ServerParse.parse(realSQL);
+		int realSQLType = rs & 0xff;
+        if (ServerParse.CALL == realSQLType )
+        {
+        	rrs.setCallStatement(true);
+        }
      	
         return rrs;
     }
