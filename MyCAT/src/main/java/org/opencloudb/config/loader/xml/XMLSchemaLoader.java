@@ -135,7 +135,8 @@ public class XMLSchemaLoader implements SchemaLoader {
 			Element schemaElement = (Element) list.item(i);
 			String name = schemaElement.getAttribute("name");
 			String dataNode = schemaElement.getAttribute("dataNode");
-			String checkSQLSchemaStr=schemaElement.getAttribute("checkSQLschema");
+			String checkSQLSchemaStr = schemaElement
+					.getAttribute("checkSQLschema");
 			String sqlMaxLimitStr = schemaElement.getAttribute("sqlMaxLimit");
 			int sqlMaxLimit = -1;
 			if (sqlMaxLimitStr != null && !sqlMaxLimitStr.isEmpty()) {
@@ -154,7 +155,8 @@ public class XMLSchemaLoader implements SchemaLoader {
 			if (schemas.containsKey(name)) {
 				throw new ConfigException("schema " + name + " duplicated!");
 			}
-			schemas.put(name, new SchemaConfig(name, dataNode, tables,sqlMaxLimit,"true".equalsIgnoreCase(checkSQLSchemaStr)));
+			schemas.put(name, new SchemaConfig(name, dataNode, tables,
+					sqlMaxLimit, "true".equalsIgnoreCase(checkSQLSchemaStr)));
 		}
 	}
 
@@ -169,6 +171,13 @@ public class XMLSchemaLoader implements SchemaLoader {
 
 			String primaryKey = tableElement.hasAttribute("primaryKey") ? tableElement
 					.getAttribute("primaryKey").toUpperCase() : null;
+
+			boolean autoIncrement = false;
+			if (tableElement.hasAttribute("autoIncrement")) {
+				autoIncrement = Boolean.parseBoolean(tableElement
+						.getAttribute("autoIncrement"));
+			}
+							
 			String tableTypeStr = tableElement.hasAttribute("type") ? tableElement
 					.getAttribute("type") : null;
 			int tableType = TableConfig.TYPE_GLOBAL_DEFAULT;
@@ -196,7 +205,7 @@ public class XMLSchemaLoader implements SchemaLoader {
 			}
 			for (int j = 0; j < tableNames.length; j++) {
 				String tableName = tableNames[j];
-				TableConfig table = new TableConfig(tableName, primaryKey,
+				TableConfig table = new TableConfig(tableName, primaryKey, autoIncrement,
 						tableType, dataNode,
 						(tableRule != null) ? tableRule.getRule() : null,
 						ruleRequired, null, false, null, null);
@@ -209,7 +218,7 @@ public class XMLSchemaLoader implements SchemaLoader {
 			}
 
 			if (tableNames.length == 1) {
-				TableConfig table = new TableConfig(tableNames[0], primaryKey,
+				TableConfig table = new TableConfig(tableNames[0], primaryKey, autoIncrement,
 						tableType, dataNode,
 						(tableRule != null) ? tableRule.getRule() : null,
 						ruleRequired, null, false, null, null);
@@ -234,11 +243,17 @@ public class XMLSchemaLoader implements SchemaLoader {
 			String cdTbName = childTbElement.getAttribute("name").toUpperCase();
 			String primaryKey = childTbElement.hasAttribute("primaryKey") ? childTbElement
 					.getAttribute("primaryKey").toUpperCase() : null;
+
+			boolean autoIncrement = false;
+			if (childTbElement.hasAttribute("autoIncrement")) {
+				autoIncrement = Boolean.parseBoolean(childTbElement
+						.getAttribute("autoIncrement"));
+			}
 			String joinKey = childTbElement.getAttribute("joinKey")
 					.toUpperCase();
 			String parentKey = childTbElement.getAttribute("parentKey")
 					.toUpperCase();
-			TableConfig table = new TableConfig(cdTbName, primaryKey,
+			TableConfig table = new TableConfig(cdTbName, primaryKey, autoIncrement,
 					TableConfig.TYPE_GLOBAL_DEFAULT, dataNodes, null, false,
 					parentTable, true, joinKey, parentKey);
 			if (tables.containsKey(table.getName())) {
@@ -377,15 +392,16 @@ public class XMLSchemaLoader implements SchemaLoader {
 				writeDbConfs[w] = createDBHostConf(name, writeNode, dbType,
 						dbDriver, maxCon, minCon);
 				NodeList readNodes = writeNode.getElementsByTagName("readHost");
-				DBHostConfig[] readDbConfs = new DBHostConfig[readNodes
-						.getLength()];
-				for (int r = 0; r < readDbConfs.length; r++) {
-					Element readNode = (Element) readNodes.item(r);
-					readDbConfs[r] = createDBHostConf(name, readNode, dbType,
-							dbDriver, maxCon, minCon);
+				if (readNodes.getLength() != 0) {
+					DBHostConfig[] readDbConfs = new DBHostConfig[readNodes
+							.getLength()];
+					for (int r = 0; r < readDbConfs.length; r++) {
+						Element readNode = (Element) readNodes.item(r);
+						readDbConfs[r] = createDBHostConf(name, readNode,
+								dbType, dbDriver, maxCon, minCon);
+					}
+					readHostsMap.put(w, readDbConfs);
 				}
-				readHostsMap.put(w, readDbConfs);
-
 			}
 
 			DataHostConfig hostConf = new DataHostConfig(name, dbType,

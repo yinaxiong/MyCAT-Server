@@ -438,5 +438,15 @@ public class StringUtil {
         }
         return new String(chars, 0, len);
     }
+    
+    public static String getMiddleString(String source,String start,String end) {
+    	int startIndex = source.indexOf(start) + start.length();
+    	int endIndex = source.indexOf(end,startIndex);
+    	return source.substring(startIndex,endIndex).trim();
+	}
+    
+    public static void main(String[] args) {
+    	System.out.print(getMiddleString("insert into ss (id) values (s)", "into ", " "));
+    }
 
 }

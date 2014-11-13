@@ -118,7 +118,6 @@ public class MultiNodeQueryHandler extends MultiNodeHandler {
 			ConnectionMeta conMeta = new ConnectionMeta(dn.getDatabase(),
 					sc.getCharset(), sc.getCharsetIndex(), autocommit);
 			dn.getConnection(conMeta, node, this, node);
-
 		}
 	}
 
@@ -194,7 +193,12 @@ public class MultiNodeQueryHandler extends MultiNodeHandler {
 			ok.read(data);
 			lock.lock();
 			try {
-				affectedRows += ok.affectedRows;
+				//判断是否是全局表，如果是，执行行数不做累加，以最后一次执行的为准。
+				if(!rrs.isGlobalTable()){
+					affectedRows += ok.affectedRows;
+				} else {
+					affectedRows = ok.affectedRows;
+				}
 				if (ok.insertId > 0) {
 					insertId = (insertId == 0) ? ok.insertId : Math.min(
 							insertId, ok.insertId);
@@ -217,6 +221,7 @@ public class MultiNodeQueryHandler extends MultiNodeHandler {
 				try {
 					ok.packetId = ++packetId;// OK_PACKET
 					ok.affectedRows = affectedRows;
+						
 					if (insertId > 0) {
 						ok.insertId = insertId;
 						source.setLastInsertId(insertId);

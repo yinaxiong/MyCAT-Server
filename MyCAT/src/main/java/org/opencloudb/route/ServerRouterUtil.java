@@ -173,6 +173,11 @@ public final class ServerRouterUtil {
 			TableConfig tc = getTableConfig(schema, parsInf.tableName);
 			Set<ColumnRoutePair> col2Val = null;
 			String partColumn = null;
+			// if is global table，set rss global table flag
+			if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
+				rrs.setGlobalTable(true);
+			}
+
 			// for partition table ,partion column must provided
 			if (tc.getTableType() != TableConfig.TYPE_GLOBAL_TABLE) {
 				if (tc.isChildTable()) {
@@ -234,6 +239,11 @@ public final class ServerRouterUtil {
 			UpdateParsInf parsInf = UpdateSQLAnalyser.analyse(ast);
 			// check if sharding columns is updated
 			TableConfig tc = getTableConfig(schema, parsInf.tableName);
+			// if is global table，set rss global table flag
+			if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
+				rrs.setGlobalTable(true);
+			}
+
 			if (parsInf.columnPairMap.containsKey(tc.getPartitionColumn())) {
 				throw new SQLNonTransientException(
 						"partion key can't be updated " + parsInf.tableName
@@ -260,12 +270,16 @@ public final class ServerRouterUtil {
 
 		} else if (ast.getNodeType() == NodeTypes.DELETE_NODE) {
 			DeleteParsInf parsInf = DeleteSQLAnalyser.analyse(ast);
+			// if is global table，set rss global table flag
+			TableConfig tc = getTableConfig(schema, parsInf.tableName);
+			if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
+				rrs.setGlobalTable(true);
+			}
 			if (parsInf.ctx != null) {
 				return tryRouteForTables(ast, false, rrs, schema, parsInf.ctx,
 						stmt, cachePool);
 			} else {
 				// no where condtion
-				TableConfig tc = getTableConfig(schema, parsInf.tableName);
 				return tryRouteForTable(ast, schema, rrs, false, stmt, tc,
 						null, null, cachePool);
 			}
@@ -273,6 +287,12 @@ public final class ServerRouterUtil {
 		} else if (ast instanceof DDLStatementNode) {
 			DDLParsInf parsInf = DDLSQLAnalyser.analyse(ast);
 			TableConfig tc = getTableConfig(schema, parsInf.tableName);
+
+			// if is global table，set rss global table flag
+			if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
+				rrs.setGlobalTable(true);
+			}
+
 			return routeToMultiNode(schema, false, false, ast, rrs,
 					tc.getDataNodes(), stmt);
 
@@ -476,7 +496,41 @@ public final class ServerRouterUtil {
 			return rrs;
 
 		}
+		//show create table tableName
+		int[] createTabInd = getCreateTablePos(upStmt, 0);
+		if (createTabInd[0] > 0) {
+			int tableNameIndex = createTabInd[0]  + createTabInd[1];
+			if(upStmt.length() > tableNameIndex) {
+				String tableName = upStmt.substring(tableNameIndex).trim();
+				MetaRouter.routeForTableMeta(rrs, schema, tableName, stmt);
+				return rrs;
+			}
+		}
+		
 		return routeToSingleNode(rrs, schema.getRandomDataNode(), stmt);
+	}
+	
+	/**
+	 * 获取语句中前关键字位置和占位个数表名位置
+	 * 
+	 * @param upStmt
+	 *            执行语句
+	 * @param start
+	 *            开始位置
+	 * @return int[]关键字位置和占位个数
+	 * @author mycat
+	 */
+	private static int[] getCreateTablePos(String upStmt, int start) {
+		String token1 = " CREATE ";
+		String token2 = " TABLE ";
+		int createInd = upStmt.indexOf(token1, start);
+		int tabInd = upStmt.indexOf(token2, start);
+		//既包含CREATE又包含TABLE，且CREATE关键字在TABLE关键字之前
+		if (createInd > 0 && tabInd >0 && tabInd > createInd) {
+			return new int[] { tabInd, token2.length() };
+		} else {
+			return new int[] { -1, token2.length() };//不满足条件时，只关注第一个返回值为-1，第二个任意
+		}
 	}
 
 	/**

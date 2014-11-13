@@ -45,15 +45,26 @@ public final class RouteResultset implements Serializable {
 	// limit output total
 	private int limitSize;
 	private SQLMerge sqlMerge;
-	
-	private Boolean callStatement = false;  //处理call关键字
+
+	private Boolean callStatement = false; // 处理call关键字
+
+	// 是否为全局表，只有在insert、update、delete、ddl里会判断并修改。默认不是全局表，用于修正全局表修改数据的反馈。
+	private boolean globalTableFlag = false;
+
+	public boolean isGlobalTable() {
+		return globalTableFlag;
+	}
+
+	public void setGlobalTable(boolean globalTableFlag) {
+		this.globalTableFlag = globalTableFlag;
+	}
 
 	public RouteResultset(String stmt, int sqlType) {
 		this.statement = stmt;
 		this.limitSize = -1;
 		this.sqlType = sqlType;
 	}
-	
+
 	public void resetNodes() {
 		if (nodes != null) {
 			for (RouteResultsetNode node : nodes) {
@@ -190,7 +201,7 @@ public final class RouteResultset implements Serializable {
 	public void setStatement(String statement) {
 		this.statement = statement;
 	}
-	
+
 	public Boolean isCallStatement() {
 		return callStatement;
 	}

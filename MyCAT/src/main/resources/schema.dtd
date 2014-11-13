@@ -27,6 +27,7 @@
 <!ATTLIST table rule NMTOKEN #IMPLIED>
 <!ATTLIST table ruleRequired NMTOKEN #IMPLIED>
 <!ATTLIST table primaryKey NMTOKEN #IMPLIED>
+<!ATTLIST table autoIncrement NMTOKEN #IMPLIED>
 <!ATTLIST table type NMTOKEN #IMPLIED>
 
 <!ELEMENT childTable (property*,(childTable*))>
@@ -34,6 +35,7 @@
 <!ATTLIST childTable joinKey NMTOKEN #REQUIRED>
 <!ATTLIST childTable parentKey NMTOKEN #REQUIRED>
 <!ATTLIST childTable primaryKey NMTOKEN #IMPLIED>
+<!ATTLIST childTable autoIncrement NMTOKEN #IMPLIED>
 
 
 <!ELEMENT dataNode (property*)>
