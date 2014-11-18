@@ -39,7 +39,8 @@ public class AutoPartitionByLong extends AbstractPartionAlgorithm implements Rul
 
 	private String mapFile;
 	private LongRange[] longRongs;
-
+	
+	private int defaultNode = -1;
 	@Override
 	public void init() {
 
@@ -58,6 +59,10 @@ public class AutoPartitionByLong extends AbstractPartionAlgorithm implements Rul
 			if (value <= longRang.valueEnd && value >= longRang.valueStart) {
 				return longRang.nodeIndx;
 			}
+		}
+		//数据超过范围，暂时使用配置的默认节点
+		if(rst ==null && defaultNode>=0){
+			return defaultNode ;
 		}
 		return rst;
 	}
@@ -117,6 +122,14 @@ public class AutoPartitionByLong extends AbstractPartionAlgorithm implements Rul
 			} catch (Exception e2) {
 			}
 		}
+	}
+	
+	public int getDefaultNode() {
+		return defaultNode;
+	}
+
+	public void setDefaultNode(int defaultNode) {
+		this.defaultNode = defaultNode;
 	}
 
 	static class LongRange {

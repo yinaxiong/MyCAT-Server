@@ -166,9 +166,9 @@ public class ServerConnection extends FrontendConnection {
 		} 
 		
 		if ( type == ServerParse.INSERT  && !isNeedSequence ) {
-				String tableName = StringUtil.getMiddleString(sql.toUpperCase(), "INTO ", " ");
+				String tableName = StringUtil.getMiddleString(sql.toUpperCase(), "INTO ", "(");
 				TableConfig tableConfig = schema.getTables().get(tableName);
-				if ( tableConfig.isAutoIncrement() ) {
+				if ( null != tableConfig && tableConfig.isAutoIncrement() ) {
 					String primaryKey = tableConfig.getPrimaryKey();
 					int firstLeftBracketIndex = sql.indexOf("(")+1;
 					int firstRightBracketIndex = sql.indexOf(")");

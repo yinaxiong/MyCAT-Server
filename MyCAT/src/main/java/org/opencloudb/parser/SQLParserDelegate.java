@@ -17,8 +17,8 @@
 package org.opencloudb.parser;
 
 import java.sql.SQLSyntaxErrorException;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+
+import org.opencloudb.MycatServer;
 
 import com.foundationdb.sql.StandardException;
 import com.foundationdb.sql.parser.QueryTreeNode;
@@ -43,6 +43,9 @@ public final class SQLParserDelegate {
 			parser.getFeatures().add(SQLParserFeature.MYSQL_INTERVAL);
 			// fix 位操作符号解析问题 add by micmiu
 			parser.getFeatures().add(SQLParserFeature.INFIX_BIT_OPERATORS);
+			// fix 最大解析文本限制 add by 石头狮子
+			parser.setMaxStringLiteralLength(MycatServer.getInstance()
+					.getConfig().getSystem().getMaxStringLiteralLength());
 			return parser;
 		}
 

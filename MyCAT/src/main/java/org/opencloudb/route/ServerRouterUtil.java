@@ -501,7 +501,11 @@ public final class ServerRouterUtil {
 		if (createTabInd[0] > 0) {
 			int tableNameIndex = createTabInd[0]  + createTabInd[1];
 			if(upStmt.length() > tableNameIndex) {
-				String tableName = upStmt.substring(tableNameIndex).trim();
+				String tableName = stmt.substring(tableNameIndex).trim();
+				int ind2 = tableName.indexOf('.');
+				if (ind2 > 0) {
+					tableName = tableName.substring(ind2 + 1);
+				}
 				MetaRouter.routeForTableMeta(rrs, schema, tableName, stmt);
 				return rrs;
 			}

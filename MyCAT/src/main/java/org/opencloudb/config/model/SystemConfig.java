@@ -55,6 +55,7 @@ public final class SystemConfig {
 	private static final String DEFAULT_CLUSTER_HEARTBEAT_PASS = "_HEARTBEAT_PASS_";
 	private static final int DEFAULT_PARSER_COMMENT_VERSION = 50148;
 	private static final int DEFAULT_SQL_RECORD_COUNT = 10;
+	private int maxStringLiteralLength = 65535;
 	private int frontWriteQueueSize = 2048;
 	private String bindIp = "0.0.0.0";
 	private int serverPort;
@@ -84,13 +85,13 @@ public final class SystemConfig {
 	private int sequnceHandlerType = SEQUENCEHANDLER_LOCALFILE;
 	private String sqlInterceptor = "org.opencloudb.interceptor.impl.DefaultSqlInterceptor";
 
-	public static final int MUTINODELIMIT_SMALL_DATA=0;
-	public static final int MUTINODELIMIT_LAR_DATA=1;
-    private int mutiNodeLimitType=MUTINODELIMIT_SMALL_DATA;
-    
-    public static final int MUTINODELIMIT_PATCH_SIZE = 100;
-    private int mutiNodePatchSize=MUTINODELIMIT_PATCH_SIZE;
-	
+	public static final int MUTINODELIMIT_SMALL_DATA = 0;
+	public static final int MUTINODELIMIT_LAR_DATA = 1;
+	private int mutiNodeLimitType = MUTINODELIMIT_SMALL_DATA;
+
+	public static final int MUTINODELIMIT_PATCH_SIZE = 100;
+	private int mutiNodePatchSize = MUTINODELIMIT_PATCH_SIZE;
+
 	public SystemConfig() {
 		this.serverPort = DEFAULT_PORT;
 		this.managerPort = DEFAULT_MANAGER_PORT;
@@ -358,6 +359,14 @@ public final class SystemConfig {
 				+ ", defaultMaxLimit=" + defaultMaxLimit
 				+ ", sequnceHandlerType=" + sequnceHandlerType
 				+ ", sqlInterceptor=" + sqlInterceptor + "]";
+	}
+
+	public int getMaxStringLiteralLength() {
+		return maxStringLiteralLength;
+	}
+
+	public void setMaxStringLiteralLength(int maxStringLiteralLength) {
+		this.maxStringLiteralLength = maxStringLiteralLength;
 	}
 
 	public int getMutiNodeLimitType() {
