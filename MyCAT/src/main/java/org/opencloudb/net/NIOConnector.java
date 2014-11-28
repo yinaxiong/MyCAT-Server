@@ -36,35 +36,21 @@ public final class NIOConnector implements
 		CompletionHandler<Void, BackendAIOConnection> {
 	private static final Logger LOGGER = Logger.getLogger(NIOConnector.class);
 	private static final ConnectIdGenerator ID_GENERATOR = new ConnectIdGenerator();
-	protected int socketRecvBuffer = 16 * 1024;
-	protected int socketSendBuffer = 8 * 1024;
 	protected int packetHeaderSize = 4;
 	protected int maxPacketSize = 16 * 1024 * 1024;
 	protected int writeQueueCapcity = 8;
 	protected long idleTimeout = 8 * 3600 * 1000L;
-	private NIOProcessor[] processors;
+	private final NIOProcessor[] processors;
 	private int nextProcessor;
 	private long connectCount;
+
+	public NIOConnector(NIOProcessor[] processors) {
+		this.processors = processors;
+	}
 
 	@Override
 	public void completed(Void result, BackendAIOConnection attachment) {
 		finishConnect(attachment);
-	}
-
-	public int getSocketRecvBuffer() {
-		return socketRecvBuffer;
-	}
-
-	public void setSocketRecvBuffer(int socketRecvBuffer) {
-		this.socketRecvBuffer = socketRecvBuffer;
-	}
-
-	public int getSocketSendBuffer() {
-		return socketSendBuffer;
-	}
-
-	public void setSocketSendBuffer(int socketSendBuffer) {
-		this.socketSendBuffer = socketSendBuffer;
 	}
 
 	public int getPacketHeaderSize() {
@@ -107,16 +93,11 @@ public final class NIOConnector implements
 	private void postConnect(BackendAIOConnection c) {
 		c.setPacketHeaderSize(packetHeaderSize);
 		c.setMaxPacketSize(maxPacketSize);
-		c.setWriteQueue(new BufferQueue(writeQueueCapcity));
 		c.setIdleTimeout(idleTimeout);
 	}
 
 	public long getConnectCount() {
 		return connectCount;
-	}
-
-	public void setProcessors(NIOProcessor[] processors) {
-		this.processors = processors;
 	}
 
 	private void finishConnect(BackendAIOConnection c) {

@@ -38,10 +38,19 @@ public final class SystemConfig {
 	private static final int DEFAULT_PORT = 8066;
 	private static final int DEFAULT_MANAGER_PORT = 9066;
 	private static final String DEFAULT_CHARSET = "UTF-8";
-	private static final int DEFAULT_BUFFER_SIZE = 4096 * 2000;
+
 	private static final int DEFAULT_BUFFER_CHUNK_SIZE = 4096;
+	private int processorBufferLocalPercent;
 	private static final int DEFAULT_PROCESSORS = Runtime.getRuntime()
 			.availableProcessors();
+	private int frontSocketSoRcvbuf = 1024 * 1024;
+	private int frontSocketSoSndbuf = 4 * 1024 * 1024;
+	private int backSocketSoRcvbuf = 4 * 1024 * 1024;// mysql 5.6
+														// net_buffer_length
+														// defaut 4M
+	private int backSocketSoSndbuf = 1024 * 1024;
+	private int frontSocketNoDelay = 1; // 0=false
+	private int backSocketNoDelay = 1; // 1=true
 	public static final int DEFAULT_POOL_SIZE = 128;// 保持后端数据通道的默认最大值
 	public static final long DEFAULT_IDLE_TIMEOUT = 30 * 60 * 1000L;
 	private static final long DEFAULT_PROCESSOR_CHECK_PERIOD = 1 * 1000L;
@@ -50,7 +59,7 @@ public final class SystemConfig {
 	private static final long DEFAULT_CLUSTER_HEARTBEAT_PERIOD = 5 * 1000L;
 	private static final long DEFAULT_CLUSTER_HEARTBEAT_TIMEOUT = 10 * 1000L;
 	private static final int DEFAULT_CLUSTER_HEARTBEAT_RETRY = 10;
-	private static final int DEFAULT_MAX_LIMIT = 1000;
+	private static final int DEFAULT_MAX_LIMIT = 100;
 	private static final String DEFAULT_CLUSTER_HEARTBEAT_USER = "_HEARTBEAT_USER_";
 	private static final String DEFAULT_CLUSTER_HEARTBEAT_PASS = "_HEARTBEAT_PASS_";
 	private static final int DEFAULT_PARSER_COMMENT_VERSION = 50148;
@@ -66,6 +75,8 @@ public final class SystemConfig {
 	private int timerExecutor;
 	private int managerExecutor;
 	private long idleTimeout;
+	// sql execute timeout (second)
+	private long sqlExecuteTimeout = 300;
 	private long processorCheckPeriod;
 	private long dataNodeIdleCheckPeriod;
 	private long dataNodeHeartbeatPeriod;
@@ -79,7 +90,7 @@ public final class SystemConfig {
 	private int sqlRecordCount;
 	private int processorBufferPool;
 	private int processorBufferChunk;
-	private int defaultMaxLimit;
+	private int defaultMaxLimit = DEFAULT_MAX_LIMIT;
 	public static final int SEQUENCEHANDLER_LOCALFILE = 0;
 	public static final int SEQUENCEHANDLER_MYSQLDB = 1;
 	private int sequnceHandlerType = SEQUENCEHANDLER_LOCALFILE;
@@ -97,10 +108,14 @@ public final class SystemConfig {
 		this.managerPort = DEFAULT_MANAGER_PORT;
 		this.charset = DEFAULT_CHARSET;
 		this.processors = DEFAULT_PROCESSORS;
-		processorBufferPool = DEFAULT_BUFFER_SIZE;
+
 		processorBufferChunk = DEFAULT_BUFFER_CHUNK_SIZE;
-		this.processorExecutor = DEFAULT_PROCESSORS;
+		this.processorExecutor = (DEFAULT_PROCESSORS != 1) ? DEFAULT_PROCESSORS * 2
+				: 4;
 		this.managerExecutor = 2;
+		processorBufferPool = DEFAULT_BUFFER_CHUNK_SIZE * processorExecutor
+				* 1000;
+		this.processorBufferLocalPercent = 100;
 		this.timerExecutor = DEFAULT_PROCESSORS;
 		this.idleTimeout = DEFAULT_IDLE_TIMEOUT;
 		this.processorCheckPeriod = DEFAULT_PROCESSOR_CHECK_PERIOD;
@@ -114,6 +129,7 @@ public final class SystemConfig {
 		this.txIsolation = Isolations.REPEATED_READ;
 		this.parserCommentVersion = DEFAULT_PARSER_COMMENT_VERSION;
 		this.sqlRecordCount = DEFAULT_SQL_RECORD_COUNT;
+
 	}
 
 	public String getSqlInterceptor() {
@@ -263,6 +279,14 @@ public final class SystemConfig {
 		this.clusterHeartbeatUser = clusterHeartbeatUser;
 	}
 
+	public long getSqlExecuteTimeout() {
+		return sqlExecuteTimeout;
+	}
+
+	public void setSqlExecuteTimeout(long sqlExecuteTimeout) {
+		this.sqlExecuteTimeout = sqlExecuteTimeout;
+	}
+
 	public String getClusterHeartbeatPass() {
 		return clusterHeartbeatPass;
 	}
@@ -285,6 +309,22 @@ public final class SystemConfig {
 
 	public void setClusterHeartbeatTimeout(long clusterHeartbeatTimeout) {
 		this.clusterHeartbeatTimeout = clusterHeartbeatTimeout;
+	}
+
+	public int getFrontsocketsorcvbuf() {
+		return frontSocketSoRcvbuf;
+	}
+
+	public int getFrontsocketsosndbuf() {
+		return frontSocketSoSndbuf;
+	}
+
+	public int getBacksocketsorcvbuf() {
+		return backSocketSoRcvbuf;
+	}
+
+	public int getBacksocketsosndbuf() {
+		return backSocketSoSndbuf;
 	}
 
 	public int getClusterHeartbeatRetry() {
@@ -335,30 +375,89 @@ public final class SystemConfig {
 		this.processorBufferChunk = processorBufferChunk;
 	}
 
+	public int getFrontSocketSoRcvbuf() {
+		return frontSocketSoRcvbuf;
+	}
+
+	public void setFrontSocketSoRcvbuf(int frontSocketSoRcvbuf) {
+		this.frontSocketSoRcvbuf = frontSocketSoRcvbuf;
+	}
+
+	public int getFrontSocketSoSndbuf() {
+		return frontSocketSoSndbuf;
+	}
+
+	public void setFrontSocketSoSndbuf(int frontSocketSoSndbuf) {
+		this.frontSocketSoSndbuf = frontSocketSoSndbuf;
+	}
+
+	public int getBackSocketSoRcvbuf() {
+		return backSocketSoRcvbuf;
+	}
+
+	public void setBackSocketSoRcvbuf(int backSocketSoRcvbuf) {
+		this.backSocketSoRcvbuf = backSocketSoRcvbuf;
+	}
+
+	public int getBackSocketSoSndbuf() {
+		return backSocketSoSndbuf;
+	}
+
+	public void setBackSocketSoSndbuf(int backSocketSoSndbuf) {
+		this.backSocketSoSndbuf = backSocketSoSndbuf;
+	}
+
+	public int getFrontSocketNoDelay() {
+		return frontSocketNoDelay;
+	}
+
+	public void setFrontSocketNoDelay(int frontSocketNoDelay) {
+		this.frontSocketNoDelay = frontSocketNoDelay;
+	}
+
+	public int getBackSocketNoDelay() {
+		return backSocketNoDelay;
+	}
+
+	public void setBackSocketNoDelay(int backSocketNoDelay) {
+		this.backSocketNoDelay = backSocketNoDelay;
+	}
+
 	@Override
 	public String toString() {
-		return "SystemConfig [frontWriteQueueSize=" + frontWriteQueueSize
-				+ ", bindIp=" + bindIp + ", serverPort=" + serverPort
-				+ ", managerPort=" + managerPort + ", charset=" + charset
-				+ ", processors=" + processors + ", processorExecutor="
-				+ processorExecutor + ", timerExecutor=" + timerExecutor
-				+ ", managerExecutor=" + managerExecutor + ", idleTimeout="
-				+ idleTimeout + ", processorCheckPeriod="
-				+ processorCheckPeriod + ", dataNodeIdleCheckPeriod="
-				+ dataNodeIdleCheckPeriod + ", dataNodeHeartbeatPeriod="
-				+ dataNodeHeartbeatPeriod + ", clusterHeartbeatUser="
-				+ clusterHeartbeatUser + ", clusterHeartbeatPass="
-				+ clusterHeartbeatPass + ", clusterHeartbeatPeriod="
-				+ clusterHeartbeatPeriod + ", clusterHeartbeatTimeout="
-				+ clusterHeartbeatTimeout + ", clusterHeartbeatRetry="
-				+ clusterHeartbeatRetry + ", txIsolation=" + txIsolation
-				+ ", parserCommentVersion=" + parserCommentVersion
-				+ ", sqlRecordCount=" + sqlRecordCount
+		return "SystemConfig [processorBufferLocalPercent="
+				+ processorBufferLocalPercent + ", frontSocketSoRcvbuf="
+				+ frontSocketSoRcvbuf + ", frontSocketSoSndbuf="
+				+ frontSocketSoSndbuf + ", backSocketSoRcvbuf="
+				+ backSocketSoRcvbuf + ", backSocketSoSndbuf="
+				+ backSocketSoSndbuf + ", frontSocketNoDelay="
+				+ frontSocketNoDelay + ", backSocketNoDelay="
+				+ backSocketNoDelay + ", maxStringLiteralLength="
+				+ maxStringLiteralLength + ", frontWriteQueueSize="
+				+ frontWriteQueueSize + ", bindIp=" + bindIp + ", serverPort="
+				+ serverPort + ", managerPort=" + managerPort + ", charset="
+				+ charset + ", processors=" + processors
+				+ ", processorExecutor=" + processorExecutor
+				+ ", timerExecutor=" + timerExecutor + ", managerExecutor="
+				+ managerExecutor + ", idleTimeout=" + idleTimeout
+				+ ", sqlExecuteTimeout=" + sqlExecuteTimeout
+				+ ", processorCheckPeriod=" + processorCheckPeriod
+				+ ", dataNodeIdleCheckPeriod=" + dataNodeIdleCheckPeriod
+				+ ", dataNodeHeartbeatPeriod=" + dataNodeHeartbeatPeriod
+				+ ", clusterHeartbeatUser=" + clusterHeartbeatUser
+				+ ", clusterHeartbeatPass=" + clusterHeartbeatPass
+				+ ", clusterHeartbeatPeriod=" + clusterHeartbeatPeriod
+				+ ", clusterHeartbeatTimeout=" + clusterHeartbeatTimeout
+				+ ", clusterHeartbeatRetry=" + clusterHeartbeatRetry
+				+ ", txIsolation=" + txIsolation + ", parserCommentVersion="
+				+ parserCommentVersion + ", sqlRecordCount=" + sqlRecordCount
 				+ ", processorBufferPool=" + processorBufferPool
 				+ ", processorBufferChunk=" + processorBufferChunk
 				+ ", defaultMaxLimit=" + defaultMaxLimit
 				+ ", sequnceHandlerType=" + sequnceHandlerType
-				+ ", sqlInterceptor=" + sqlInterceptor + "]";
+				+ ", sqlInterceptor=" + sqlInterceptor + ", mutiNodeLimitType="
+				+ mutiNodeLimitType + ", mutiNodePatchSize="
+				+ mutiNodePatchSize + "]";
 	}
 
 	public int getMaxStringLiteralLength() {
@@ -383,6 +482,14 @@ public final class SystemConfig {
 
 	public void setMutiNodePatchSize(int mutiNodePatchSize) {
 		this.mutiNodePatchSize = mutiNodePatchSize;
+	}
+
+	public int getProcessorBufferLocalPercent() {
+		return processorBufferLocalPercent;
+	}
+
+	public void setProcessorBufferLocalPercent(int processorBufferLocalPercent) {
+		this.processorBufferLocalPercent = processorBufferLocalPercent;
 	}
 
 }

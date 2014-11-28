@@ -57,7 +57,6 @@ public class ConnectionHeartBeatHandler implements ResponseHandler {
 			HeartBeatCon hbCon = new HeartBeatCon(conn);
 			boolean notExist = (allCons.putIfAbsent(hbCon.conn.getId(), hbCon) == null);
 			if (notExist) {
-				conn.setRunning(true);
 				conn.setResponseHandler(this);
 				conn.query(sql);
 
@@ -79,7 +78,7 @@ public class ConnectionHeartBeatHandler implements ResponseHandler {
 		Iterator<Entry<Long, HeartBeatCon>> itors = allCons.entrySet()
 				.iterator();
 		while (itors.hasNext()) {
-			HeartBeatCon hbCon =itors.next().getValue();
+			HeartBeatCon hbCon = itors.next().getValue();
 			if (hbCon.timeOutTimestamp < curTime) {
 				abandCons.add(hbCon.conn);
 				itors.remove();
@@ -113,7 +112,6 @@ public class ConnectionHeartBeatHandler implements ResponseHandler {
 	@Override
 	public void errorResponse(byte[] data, BackendConnection conn) {
 		removeFinished(conn);
-		conn.setRunning(false);
 		ErrorPacket err = new ErrorPacket();
 		err.read(data);
 		LOGGER.warn("errorResponse " + err.errno + " "
@@ -127,7 +125,6 @@ public class ConnectionHeartBeatHandler implements ResponseHandler {
 		boolean executeResponse = conn.syncAndExcute();
 		if (executeResponse) {
 			removeFinished(conn);
-			conn.setRunning(false);
 			conn.release();
 		}
 
@@ -140,7 +137,6 @@ public class ConnectionHeartBeatHandler implements ResponseHandler {
 	@Override
 	public void rowEofResponse(byte[] eof, BackendConnection conn) {
 		removeFinished(conn);
-		conn.setRunning(false);
 		conn.release();
 	}
 

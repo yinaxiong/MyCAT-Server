@@ -69,15 +69,16 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 	private long insertId;
 	private boolean fieldsReturned;
 
-	public MultiNodeQueryWithLimitHandler(RouteResultset rrs, boolean autocommit,
-			NonBlockingSession session, MutiDataMergeService dataMergeSvr) {
+	public MultiNodeQueryWithLimitHandler(RouteResultset rrs,
+			boolean autocommit, NonBlockingSession session,
+			MutiDataMergeService dataMergeSvr) {
 		super(rrs, autocommit, session, dataMergeSvr);
 		if (rrs.getNodes() == null) {
 			throw new IllegalArgumentException("routeNode is null!");
 		}
 		this.rrs = rrs;
 		this.rrs.resetNodes();
-		
+
 		this.autocommit = session.getSource().isAutocommit();
 		this.session = session;
 		this.lock = new ReentrantLock();
@@ -86,8 +87,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 		if (this.dataMergeSvr != null) {
 			this.dataMergeSvr.setLimitExcution(this);
 			this.dataMergeSvr.initHandler(session);
-			
-			LOGGER.debug("has data merge logic ");
+
 		}
 	}
 
@@ -107,34 +107,17 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 
 		for (final RouteResultsetNode node : rrs.getNodes()) {
 			final BackendConnection conn = session.getTarget(node);
-			if (session.tryExistsCon(conn, node, new Runnable() {
-				@Override
-				public void run() {
-					_execute(conn, node);
-				}
-			})) {
-				// to next node
-				continue;
+			if (session.tryExistsCon(conn, node)) {
+				_execute(conn, node);
+			} else {
+				// create new connection
+				PhysicalDBNode dn = conf.getDataNodes().get(node.getName());
+				ConnectionMeta conMeta = new ConnectionMeta(dn.getDatabase(),
+						sc.getCharset(), sc.getCharsetIndex(), autocommit);
+				dn.getConnection(conMeta, node, this, node);
 			}
-			// create new connection
-			PhysicalDBNode dn = conf.getDataNodes().get(node.getName());
-			ConnectionMeta conMeta = new ConnectionMeta(dn.getDatabase(),
-					sc.getCharset(), sc.getCharsetIndex(), autocommit);
-			dn.getConnection(conMeta, node, this, node);
 
 		}
-	}
-
-	/**
-	 * lazy create ByteBuffer only when needed
-	 * 
-	 * @return
-	 */
-	private ByteBuffer allocBuffer() {
-		if (buffer == null) {
-			buffer = session.getSource().allocate();
-		}
-		return buffer;
 	}
 
 	private void _execute(BackendConnection conn, RouteResultsetNode node) {
@@ -143,7 +126,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 		}
 		this.dataMergeSvr.execute(conn, node);
 	}
-	
+
 	@Override
 	public void connectionAcquired(final BackendConnection conn) {
 		final RouteResultsetNode node = (RouteResultsetNode) conn
@@ -201,7 +184,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 			}
 			if (decrementCountBy(1)) {
 				if (this.autocommit) {// clear all connections
-					session.releaseConnections();
+					session.releaseConnections(false);
 				}
 				if (this.isFail() || session.closed()) {
 					tryErrorFinished(conn, true);
@@ -226,11 +209,11 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 		}
 	}
 
-	private boolean canClose(BackendConnection conn, boolean tryErrorFinish) {
+	protected boolean canClose(BackendConnection conn, boolean tryErrorFinish) {
 		if (conn == null) {
 			this.dataMergeSvr.releaseAllBackend();
 		}
-		
+
 		boolean allFinished = false;
 		if (tryErrorFinish) {
 			allFinished = this.decrementCountBy(1);
@@ -255,7 +238,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 		}
 		ServerConnection source = session.getSource();
 		if (this.autocommit) {// clear all connections
-			session.releaseConnections();
+			session.releaseConnections(false);
 		}
 
 		if (this.isFail() || session.closed()) {
@@ -265,8 +248,8 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 
 		try {
 			lock.lock();
-			// lazy allocate buffer
-			allocBuffer();
+			ByteBuffer buffer = session.getSource().allocate();
+
 			if (dataMergeSvr != null && !mergeOutputed) {
 				int i = 0;
 				int start = dataMergeSvr.getRrs().getLimitStart();
@@ -299,7 +282,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 				LOGGER.debug("last packet id:" + packetId);
 			}
 			source.write(source.writeToBuffer(eof, buffer));
-			buffer = null;
+
 		} catch (Exception e) {
 			handleDataProcessException(e, conn);
 		} finally {
@@ -315,8 +298,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 			byte[] eof, BackendConnection conn) {
 		ServerConnection source = null;
 		lock.lock();
-		// lazy allocate buffer
-		allocBuffer();
+
 		try {
 			if (fieldsReturned) {
 				return;
@@ -324,6 +306,8 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 			fieldsReturned = true;
 			header[3] = ++packetId;
 			source = session.getSource();
+
+			ByteBuffer buffer = session.getSource().allocate();
 			buffer = source.writeToBuffer(header, buffer);
 			fieldCount = fields.size();
 
@@ -361,7 +345,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 				}
 
 				field[3] = ++packetId;
-				buffer = source.writeToBuffer(field, buffer);
+				source.write(field);
 			}
 			if (dataMergeSvr != null) {
 				dataMergeSvr.onRowMetaData(columToIndx, fieldCount);
@@ -369,7 +353,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 			}
 
 			eof[3] = ++packetId;
-			buffer = source.writeToBuffer(eof, buffer);
+			source.write(eof);
 		} catch (Exception e) {
 			handleDataProcessException(e, conn);
 		} finally {
@@ -411,7 +395,7 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 					pool.putIfAbsent(priamaryKeyTable, primaryKey, dataNode);
 				}
 				row[3] = ++packetId;
-				buffer = session.getSource().writeToBuffer(row, buffer);
+				session.getSource().write(row);
 			}
 
 		} catch (Exception e) {
@@ -426,21 +410,6 @@ public class MultiNodeQueryWithLimitHandler extends MultiNodeQueryHandler {
 		if (dataMergeSvr != null) {
 			dataMergeSvr.clear();
 		}
-
-		ByteBuffer buf;
-		lock.lock();
-		try {
-			buf = buffer;
-			if (buf != null) {
-				buffer = null;
-			}
-		} finally {
-			lock.unlock();
-		}
-		if (buf != null) {
-			session.getSource().recycleIfNeed(buf);
-		}
-
 	}
 
 	@Override

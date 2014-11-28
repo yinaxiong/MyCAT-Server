@@ -35,8 +35,27 @@ public final class SQLParserDelegate {
 
 	public static final String DEFAULT_CHARSET = "utf-8";
 
-	private static final ThreadLocal<SQLParser> sqlParser = new ThreadLocal<SQLParser>() {
-		protected SQLParser initialValue() {
+	// private static final ThreadLocal<SQLParser> sqlParser = new
+	// ThreadLocal<SQLParser>() {
+	// protected SQLParser initialValue() {
+	// SQLParser parser = new SQLParser();
+	// parser.getFeatures().add(SQLParserFeature.DOUBLE_QUOTED_STRING);
+	// parser.getFeatures().add(SQLParserFeature.MYSQL_HINTS);
+	// parser.getFeatures().add(SQLParserFeature.MYSQL_INTERVAL);
+	// // fix 位操作符号解析问题 add by micmiu
+	// parser.getFeatures().add(SQLParserFeature.INFIX_BIT_OPERATORS);
+	// // fix 最大解析文本限制 add by 石头狮子
+	// parser.setMaxStringLiteralLength(MycatServer.getInstance()
+	// .getConfig().getSystem().getMaxStringLiteralLength());
+	// return parser;
+	// }
+	//
+	// };
+
+	public static QueryTreeNode parse(String stmt, String string)
+			throws SQLSyntaxErrorException {
+		try {
+			// return sqlParser.get().parseStatement(stmt);
 			SQLParser parser = new SQLParser();
 			parser.getFeatures().add(SQLParserFeature.DOUBLE_QUOTED_STRING);
 			parser.getFeatures().add(SQLParserFeature.MYSQL_HINTS);
@@ -46,15 +65,7 @@ public final class SQLParserDelegate {
 			// fix 最大解析文本限制 add by 石头狮子
 			parser.setMaxStringLiteralLength(MycatServer.getInstance()
 					.getConfig().getSystem().getMaxStringLiteralLength());
-			return parser;
-		}
-
-	};
-
-	public static QueryTreeNode parse(String stmt, String string)
-			throws SQLSyntaxErrorException {
-		try {
-			return sqlParser.get().parseStatement(stmt);
+			return parser.parseStatement(stmt);
 		} catch (StandardException e) {
 			throw new SQLSyntaxErrorException(e);
 		}

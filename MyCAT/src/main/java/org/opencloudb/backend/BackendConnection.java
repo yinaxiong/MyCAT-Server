@@ -29,8 +29,6 @@ public interface BackendConnection extends ClosableConnection {
 
 	public void release();
 
-	public void setRunning(boolean running);
-
 	public boolean setResponseHandler(ResponseHandler commandHandler);
 
 	public void commit();
@@ -52,8 +50,6 @@ public interface BackendConnection extends ClosableConnection {
 
 	public void rollback();
 
-	public boolean isRunning();
-
 	public boolean isBorrowed();
 
 	public void setBorrowed(boolean borrowed);
@@ -63,7 +59,7 @@ public interface BackendConnection extends ClosableConnection {
 	public boolean isAutocommit();
 
 	public long getId();
-	
+
 	public boolean isFake();
 
 }

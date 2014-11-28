@@ -50,6 +50,7 @@ public class PartionByMod extends AbstractPartionAlgorithm implements RuleAlgori
 
 	@Override
 	public Integer calculate(String columnValue) {
+
 	BigInteger bigNum = new BigInteger(columnValue).abs();
 	 return (bigNum.mod(BigInteger.valueOf(count))).intValue();
 	}

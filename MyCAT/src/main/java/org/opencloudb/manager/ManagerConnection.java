@@ -26,8 +26,6 @@ package org.opencloudb.manager;
 import java.io.IOException;
 import java.nio.channels.AsynchronousSocketChannel;
 
-import org.opencloudb.MycatServer;
-import org.opencloudb.config.ErrorCode;
 import org.opencloudb.net.FrontendConnection;
 import org.opencloudb.util.TimeUtil;
 
@@ -54,16 +52,7 @@ public class ManagerConnection extends FrontendConnection {
 
 	@Override
 	public void handle(final byte[] data) {
-		MycatServer.getInstance().geAIOExecutor().execute(new Runnable() {
-			@Override
-			public void run() {
-				try {
-					handler.handle(data);
-				} catch (Throwable t) {
-					error(ErrorCode.ERR_HANDLE_DATA, t);
-				}
-			}
-		});
+		handler.handle(data);
 	}
 
 }

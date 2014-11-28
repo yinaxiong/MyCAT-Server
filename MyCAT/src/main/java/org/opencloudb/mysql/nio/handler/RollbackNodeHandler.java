@@ -56,7 +56,6 @@ public class RollbackNodeHandler extends MultiNodeHandler {
 		}
 
 		// 执行
-		Executor executor = session.getSource().getProcessor().getExecutor();
 		int started = 0;
 		for (final RouteResultsetNode node : session.getTargetKeys()) {
 			if (node == null) {
@@ -69,21 +68,15 @@ public class RollbackNodeHandler extends MultiNodeHandler {
 			}
 			final BackendConnection conn = session.getTarget(node);
 			if (conn != null) {
-				conn.setRunning(true);
-				executor.execute(new Runnable() {
-					@Override
-					public void run() {
-						if(LOGGER.isDebugEnabled())
-						{
-							LOGGER.debug("rollback job run for "+conn);
-						}
-						if (clearIfSessionClosed(session)) {
-							return;
-						}
-						conn.setResponseHandler(RollbackNodeHandler.this);
-						conn.rollback();
-					}
-				});
+				if (LOGGER.isDebugEnabled()) {
+					LOGGER.debug("rollback job run for " + conn);
+				}
+				if (clearIfSessionClosed(session)) {
+					return;
+				}
+				conn.setResponseHandler(RollbackNodeHandler.this);
+				conn.rollback();
+
 				++started;
 			}
 		}
@@ -93,16 +86,15 @@ public class RollbackNodeHandler extends MultiNodeHandler {
 			 * assumption: only caused by front-end connection close. <br/>
 			 * Otherwise, packet must be returned to front-end
 			 */
-			session.clearResources();
+			session.clearResources(true);
 		}
 	}
 
 	@Override
 	public void okResponse(byte[] ok, BackendConnection conn) {
-		conn.setRunning(false);
 		if (decrementCountBy(1)) {
 			// clear all resources
-			session.clearResources();
+			session.clearResources(false);
 			if (this.isFail() || session.closed()) {
 				tryErrorFinished(conn, true);
 			} else {

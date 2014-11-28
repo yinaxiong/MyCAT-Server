@@ -50,7 +50,7 @@ import org.opencloudb.util.TimeUtil;
  */
 public class ShowBackend {
 
-	private static final int FIELD_COUNT = 16;
+	private static final int FIELD_COUNT = 15;
 	private static final ResultSetHeaderPacket header = PacketUtil
 			.getHeader(FIELD_COUNT);
 	private static final FieldPacket[] fields = new FieldPacket[FIELD_COUNT];
@@ -80,8 +80,8 @@ public class ShowBackend {
 		fields[i++].packetId = ++packetId;
 		fields[i] = PacketUtil.getField("closed", Fields.FIELD_TYPE_VAR_STRING);
 		fields[i++].packetId = ++packetId;
-		fields[i] = PacketUtil.getField("run", Fields.FIELD_TYPE_VAR_STRING);
-		fields[i++].packetId = ++packetId;
+//		fields[i] = PacketUtil.getField("run", Fields.FIELD_TYPE_VAR_STRING);
+//		fields[i++].packetId = ++packetId;
 		fields[i] = PacketUtil.getField("borrowed",
 				Fields.FIELD_TYPE_VAR_STRING);
 		fields[i++].packetId = ++packetId;
@@ -144,22 +144,22 @@ public class ShowBackend {
 		row.add(LongUtil.toBytes((TimeUtil.currentTimeMillis() - c
 				.getStartupTime()) / 1000L));
 		row.add(c.isClosed() ? "true".getBytes() : "false".getBytes());
-		boolean isRunning = c.isRunning();
-		row.add(isRunning ? "true".getBytes() : "false".getBytes());
+//		boolean isRunning = c.isRunning();
+//		row.add(isRunning ? "true".getBytes() : "false".getBytes());
 		boolean isBorrowed=c.isBorrowed();
 		row.add(isBorrowed ? "true".getBytes() : "false".getBytes());
-		BufferQueue bq = null;
+		int writeQueueSize=0;
 		String schema="";
 		String txLevel="";
 		String txAutommit="";
 		if (c instanceof MySQLConnection) {
 			MySQLConnection mysqlC=(MySQLConnection) c;
-			bq=mysqlC.getWriteQueue();
+			writeQueueSize=mysqlC.getWriteQueue().size();
 			schema=mysqlC.getSchema();
 			txLevel=mysqlC.getTxIsolation()+"";
 			txAutommit=mysqlC.isAutocommit()+"";
 		}
-		row.add(IntegerUtil.toBytes(bq == null ? 0 : bq.snapshotSize()));
+		row.add(IntegerUtil.toBytes(writeQueueSize));
 		row.add(schema.getBytes());
 		row.add(txLevel.getBytes());
 		row.add(txAutommit.getBytes());

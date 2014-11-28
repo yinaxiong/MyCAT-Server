@@ -140,7 +140,7 @@ class FetchMySQLSequnceHandler implements ResponseHandler {
 
 	@Override
 	public void connectionAcquired(BackendConnection conn) {
-		conn.setRunning(true);
+		
 		conn.setResponseHandler(this);
 		try {
 			conn.query(((SequnceVal) conn.getAttachment()).sql);
@@ -159,12 +159,12 @@ class FetchMySQLSequnceHandler implements ResponseHandler {
 	@Override
 	public void errorResponse(byte[] data, BackendConnection conn) {
 		((SequnceVal) conn.getAttachment()).dbfinished = true;
-		conn.setRunning(false);
+
 		ErrorPacket err = new ErrorPacket();
 		err.read(data);
 		LOGGER.warn("errorResponse " + err.errno + " "
 				+ new String(err.message));
-		conn.setRunning(false);
+
 		conn.release();
 
 	}
@@ -174,7 +174,6 @@ class FetchMySQLSequnceHandler implements ResponseHandler {
 		boolean executeResponse = conn.syncAndExcute();
 		if (executeResponse) {
 			((SequnceVal) conn.getAttachment()).dbfinished = true;
-			conn.setRunning(false);
 			conn.release();
 		}
 
@@ -198,14 +197,12 @@ class FetchMySQLSequnceHandler implements ResponseHandler {
 	@Override
 	public void rowEofResponse(byte[] eof, BackendConnection conn) {
 		((SequnceVal) conn.getAttachment()).dbfinished = true;
-		conn.setRunning(false);
 		conn.release();
 	}
 
 	private void executeException(BackendConnection c, Throwable e) {
 		((SequnceVal) c.getAttachment()).dbfinished = true;
 		LOGGER.warn("executeException   " + e);
-		c.setRunning(false);
 		c.close("exception:" + e);
 
 	}

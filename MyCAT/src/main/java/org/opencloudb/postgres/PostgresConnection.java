@@ -113,11 +113,7 @@ public class PostgresConnection extends BackendAIOConnection {
 		
 	}
 
-	@Override
-	public void setRunning(boolean running) {
-		// TODO Auto-generated method stub
-		
-	}
+	
 
 	@Override
 	public boolean setResponseHandler(ResponseHandler commandHandler) {
@@ -174,11 +170,7 @@ public class PostgresConnection extends BackendAIOConnection {
 		
 	}
 
-	@Override
-	public boolean isRunning() {
-		// TODO Auto-generated method stub
-		return false;
-	}
+	
 
 	@Override
 	public boolean isBorrowed() {

@@ -23,7 +23,6 @@
  */
 package org.opencloudb.mysql.nio.handler;
 
-import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -46,7 +45,6 @@ abstract class MultiNodeHandler implements ResponseHandler, Terminatable {
 	private volatile String error;
 	protected byte packetId;
 	protected volatile boolean errorRepsponsed = false;
-	protected ByteBuffer buffer;
 
 	public MultiNodeHandler(NonBlockingSession session) {
 		if (session == null) {
@@ -65,7 +63,7 @@ abstract class MultiNodeHandler implements ResponseHandler, Terminatable {
 	}
 
 	private int nodeCount;
-	private int okCount;
+
 	private Runnable terminateCallBack;
 
 	@Override
@@ -84,6 +82,19 @@ abstract class MultiNodeHandler implements ResponseHandler, Terminatable {
 		if (zeroReached) {
 			terminateCallBack.run();
 		}
+	}
+
+	protected boolean canClose(BackendConnection conn, boolean tryErrorFinish) {
+
+		// realse this connection if safe
+		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled(), false);
+		boolean allFinished = false;
+		if (tryErrorFinish) {
+			allFinished = this.decrementCountBy(1);
+			this.tryErrorFinished(conn, allFinished);
+		}
+
+		return allFinished;
 	}
 
 	protected void decrementCountToZero() {
@@ -107,8 +118,7 @@ abstract class MultiNodeHandler implements ResponseHandler, Terminatable {
 	}
 
 	public void errorResponse(byte[] data, BackendConnection conn) {
-		conn.setRunning(false);
-		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled());
+		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled(), false);
 		ErrorPacket err = new ErrorPacket();
 		err.read(data);
 		String errmsg = new String(err.message);
@@ -125,7 +135,7 @@ abstract class MultiNodeHandler implements ResponseHandler, Terminatable {
 				LOGGER.debug("session closed ,clear resources " + session);
 			}
 
-			session.clearResources();
+			session.clearResources(true);
 			this.clearResources();
 			return true;
 		} else {
@@ -151,19 +161,9 @@ abstract class MultiNodeHandler implements ResponseHandler, Terminatable {
 		}
 		return zeroReached;
 	}
-	
-	protected boolean decrementOkCountBy(int finished) {
-		lock.lock();
-		try {
-			return --okCount == 0;
-		} finally {
-			lock.unlock();
-		}
-	}
 
 	protected void reset(int initCount) {
 		nodeCount = initCount;
-		okCount = initCount;
 		isFailed.set(false);
 		error = null;
 		packetId = 0;
@@ -186,20 +186,14 @@ abstract class MultiNodeHandler implements ResponseHandler, Terminatable {
 	protected void tryErrorFinished(BackendConnection conn, boolean allEnd) {
 		if (!errorRepsponsed && allEnd && !session.closed()) {
 			errorRepsponsed = true;
-			// if(buffer!=null)
-			// {
-			// session.getSource().write(buffer);
-			// }
-			if (buffer != null) {
-				buffer.clear();
-			}
+			
 			createErrPkg(this.error).write(session.getSource());
 			// clear session resources,release all
 			if (LOGGER.isDebugEnabled()) {
 				LOGGER.debug("error all end ,clear session resource ");
 			}
 			if (session.getSource().isAutocommit()) {
-				session.clearResources();
+				session.clearResources(false);
 			} else {
 				session.getSource().setTxInterrupt(this.error);
 				// clear resouces
@@ -211,9 +205,8 @@ abstract class MultiNodeHandler implements ResponseHandler, Terminatable {
 	}
 
 	public void connectionClose(BackendConnection conn, String reason) {
-		conn.setRunning(false);
 		this.setFail("closed connection:" + reason + " con:" + conn);
-		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled());
+		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled(), false);
 		boolean finished = false;
 		lock.lock();
 		try {

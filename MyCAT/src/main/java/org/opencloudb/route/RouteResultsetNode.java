@@ -31,9 +31,13 @@ import org.opencloudb.server.parser.ServerParse;
  * @author mycat
  */
 public final class RouteResultsetNode implements Serializable {
-	private final String name; 	// 数据节点名称
-	private String statement;	// 执行的语句
-	private final String srcStatement; 
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
+	private final String name; // 数据节点名称
+	private String statement; // 执行的语句
+	private final String srcStatement;
 	private final int sqlType;
 	private final boolean canRunInReadDB;
 	private final boolean hasBlanceFlag;
@@ -44,13 +48,14 @@ public final class RouteResultsetNode implements Serializable {
 		this.srcStatement = srcStatement;
 		this.statement = srcStatement;
 		canRunInReadDB = (sqlType == ServerParse.SELECT || sqlType == ServerParse.SHOW);
-		hasBlanceFlag = (statement!=null)&&statement.startsWith("/*balance*/");
+		hasBlanceFlag = (statement != null)
+				&& statement.startsWith("/*balance*/");
 	}
-	
+
 	public void setStatement(String statement) {
 		this.statement = statement;
 	}
-	
+
 	public void resetStatement() {
 		this.statement = srcStatement;
 	}

@@ -59,6 +59,7 @@ public class PhysicalDBPool {
 	private final int writeType;
 	private final Random random = new Random();
 	private final Random wnrandom = new Random();
+	private String[] schemas;
 
 	public PhysicalDBPool(String name, PhysicalDatasource[] writeSources,
 			Map<Integer, PhysicalDatasource[]> readSources, int balance,
@@ -270,9 +271,11 @@ public class PhysicalDBPool {
 				initSize);
 		// long start=System.currentTimeMillis();
 		// long timeOut=start+5000*1000L;
-		ConnectionMeta conMeta = new ConnectionMeta(null, "utf8", -1, true);
+
 		for (int i = 0; i < initSize; i++) {
 			try {
+				ConnectionMeta conMeta = new ConnectionMeta(this.schemas[i
+						% schemas.length], "utf8", -1, true);
 				ds.getConnection(conMeta, getConHandler, null);
 			} catch (Exception e) {
 				LOGGER.warn(getMessage(index, " init connection error."), e);
@@ -464,6 +467,14 @@ public class PhysicalDBPool {
 
 		}
 		return okSources;
+	}
+
+	public String[] getSchemas() {
+		return schemas;
+	}
+
+	public void setSchemas(String[] mySchemas) {
+		this.schemas = mySchemas;
 	}
 
 }

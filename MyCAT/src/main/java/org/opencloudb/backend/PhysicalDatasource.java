@@ -24,22 +24,21 @@
 package org.opencloudb.backend;
 
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedList;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.apache.log4j.Logger;
 import org.opencloudb.config.Alarms;
 import org.opencloudb.config.model.DBHostConfig;
 import org.opencloudb.config.model.DataHostConfig;
 import org.opencloudb.heartbeat.DBHeartbeat;
+import org.opencloudb.mysql.nio.MySQLConnection;
 import org.opencloudb.mysql.nio.handler.ConnectionHeartBeatHandler;
 import org.opencloudb.mysql.nio.handler.DelegateResponseHandler;
+import org.opencloudb.mysql.nio.handler.NewConnectionRespHandler;
 import org.opencloudb.mysql.nio.handler.ResponseHandler;
-import org.opencloudb.mysql.nio.handler.SimpleLogHandler;
-import org.opencloudb.route.RouteResultsetNode;
-import org.opencloudb.server.ServerConnection;
 import org.opencloudb.util.TimeUtil;
 
 public abstract class PhysicalDatasource {
@@ -47,10 +46,9 @@ public abstract class PhysicalDatasource {
 			.getLogger(PhysicalDatasource.class);
 
 	private final String name;
-	private final ReentrantLock lock = new ReentrantLock();
 	private final int size;
 	private final DBHostConfig config;
-	private final BackendConnection[] items;
+	private final ConMap conMap = new ConMap();
 	private DBHeartbeat heartbeat;
 	private final boolean readNode;
 	private volatile long heartbeatRecoveryTime;
@@ -58,12 +56,9 @@ public abstract class PhysicalDatasource {
 	private final ConnectionHeartBeatHandler conHeartBeatHanler = new ConnectionHeartBeatHandler();
 	private PhysicalDBPool dbPool;
 
-	private long executeCount;
-
 	public PhysicalDatasource(DBHostConfig config, DataHostConfig hostConfig,
 			boolean isReadNode) {
 		this.size = config.getMaxCon();
-		this.items = new BackendConnection[size];
 		this.config = config;
 		this.name = config.getHostName();
 		this.hostConfig = hostConfig;
@@ -72,20 +67,12 @@ public abstract class PhysicalDatasource {
 	}
 
 	public boolean isMyConnection(BackendConnection con) {
-		BackendConnection[] theItems = null;
-		final ReentrantLock lock = this.lock;
-		lock.lock();
-		try {
-			theItems = this.items;
-		} finally {
-			lock.unlock();
+		if (con instanceof MySQLConnection) {
+			return ((MySQLConnection) con).getPool() == this;
+		} else {
+			return false;
 		}
-		for (BackendConnection myCon : theItems) {
-			if (myCon == con) {
-				return true;
-			}
-		}
-		return false;
+
 	}
 
 	public DataHostConfig getHostConfig() {
@@ -115,17 +102,29 @@ public abstract class PhysicalDatasource {
 	}
 
 	public long getExecuteCount() {
+		long executeCount = 0;
+		for (ConQueue queue : conMap.getAllConQueue()) {
+			executeCount += queue.getExecuteCount();
+
+		}
 		return executeCount;
 	}
-	
-	public int getActiveCount() {
-		int running = 0;
-		for (BackendConnection con : this.items) {
-			if (con != null && con.isBorrowed() && !con.isFake()) {
-				running++;
-			}
-		}
-		return running;
+
+	public long getExecuteCountForSchema(String schema) {
+		return conMap.getSchemaConQueue(schema).getExecuteCount();
+
+	}
+
+	public int getActiveCountForSchema(String schema) {
+		return conMap.getActiveCountForSchema(schema, this);
+	}
+
+	public int getIdleCountForSchema(String schema) {
+		ConQueue queue = conMap.getSchemaConQueue(schema);
+		int total = 0;
+		total += queue.getAutoCommitCons().size()
+				+ queue.getManCommitCons().size();
+		return total;
 	}
 
 	public DBHeartbeat getHeartbeat() {
@@ -133,13 +132,12 @@ public abstract class PhysicalDatasource {
 	}
 
 	public int getIdleCount() {
-		int idle = 0;
-		for (BackendConnection con : this.items) {
-			if (con != null && !con.isBorrowed() && !con.isFake()) {
-				idle++;
-			}
+		int total = 0;
+		for (ConQueue queue : conMap.getAllConQueue()) {
+			total += queue.getAutoCommitCons().size()
+					+ queue.getManCommitCons().size();
 		}
-		return idle;
+		return total;
 	}
 
 	private boolean validSchema(String schema) {
@@ -148,145 +146,138 @@ public abstract class PhysicalDatasource {
 				&& !theSchema.equals("snyn...");
 	}
 
-	public void heatBeatCheck(long timeout, long conHeartBeatPeriod) {
-		int IDLE_CLOSE_COUNT = 3;
+	private void checkIfNeedHeartBeat(
+			LinkedList<BackendConnection> heartBeatCons, ConQueue queue,
+			ConcurrentLinkedQueue<BackendConnection> checkLis,
+			long hearBeatTime, long hearBeatTime2) {
 		int MAX_CONS_IN_ONE_CHECK = 10;
+		Iterator<BackendConnection> checkListItor = checkLis.iterator();
+		while (checkListItor.hasNext()) {
+			BackendConnection con = checkListItor.next();
+			if (con.isClosedOrQuit()) {
+				checkListItor.remove();
+				continue;
+			}
+			if (validSchema(con.getSchema())) {
+				if (con.getLastTime() < hearBeatTime) {
+					if (heartBeatCons.size() < MAX_CONS_IN_ONE_CHECK) {
+						checkListItor.remove();
+						// Heart beat check
+						con.setBorrowed(true);
+						heartBeatCons.add(con);
+					}
+				}
+			} else if (con.getLastTime() < hearBeatTime2) {
+				{// not valid schema conntion should close for idle
+					// exceed 2*conHeartBeatPeriod
+					checkListItor.remove();
+					con.close(" heart beate idle ");
+				}
+
+			}
+
+		}
+
+	}
+
+	public void heatBeatCheck(long timeout, long conHeartBeatPeriod) {
+		int ildeCloseCount = hostConfig.getMinCon() * 3;
+		int MAX_CONS_IN_ONE_CHECK = 5;
 		LinkedList<BackendConnection> heartBeatCons = new LinkedList<BackendConnection>();
-		LinkedList<BackendConnection> idleConList = new LinkedList<BackendConnection>();
-		int idleCons = 0;
-		int activeCons = 0;
+
 		long hearBeatTime = TimeUtil.currentTimeMillis() - conHeartBeatPeriod;
 		long hearBeatTime2 = TimeUtil.currentTimeMillis() - 2
 				* conHeartBeatPeriod;
-		final ReentrantLock lock = this.lock;
-		lock.lock();
-		try {
+		for (ConQueue queue : conMap.getAllConQueue()) {
 
-			for (int i = 0; i < items.length; i++) {
-				BackendConnection con = items[i];
-				if (con == null) {
-					continue;
-				} else if (con.isClosedOrQuit()) {
-					continue;
-				}
-				boolean borrowed = con.isBorrowed();
-				if (borrowed && !con.isFake()) {
-					activeCons++;
-				} else if(!con.isFake()) {
-					idleCons++;
-					idleConList.add(con);
-				}
-				if (!borrowed) {
-					if (validSchema(con.getSchema())) {
-						if (con.getLastTime() < hearBeatTime) {
-							if (heartBeatCons.size() < MAX_CONS_IN_ONE_CHECK) {
-								// Heart beat check
-								con.setBorrowed(true);
-								heartBeatCons.add(con);
-							}
-						}
-					} else if (con.getLastTime() < hearBeatTime2) {
-						{// not valid schema conntion should close for idle
-							// exceed 2*conHeartBeatPeriod
-							con.close(" heart beate idle ");
-							items[i] = null;
-						}
-
-					}
-				}
+			checkIfNeedHeartBeat(heartBeatCons, queue,
+					queue.getAutoCommitCons(), hearBeatTime, hearBeatTime2);
+			if (heartBeatCons.size() < MAX_CONS_IN_ONE_CHECK) {
+				checkIfNeedHeartBeat(heartBeatCons, queue,
+						queue.getManCommitCons(), hearBeatTime, hearBeatTime2);
 			}
-		} finally {
-			lock.unlock();
+			if (heartBeatCons.size() >= MAX_CONS_IN_ONE_CHECK) {
+				break;
+			}
+
 		}
+
 		if (!heartBeatCons.isEmpty()) {
 			for (BackendConnection con : heartBeatCons) {
 				conHeartBeatHanler
 						.doHeartBeat(con, hostConfig.getHearbeatSQL());
 			}
 		}
+
 		// check if there has timeouted heatbeat cons
 		conHeartBeatHanler.abandTimeOuttedConns();
+		int idleCons = getIdleCount();
+		int activeCons = this.getActiveCount();
+		int createCount = (hostConfig.getMinCon() - idleCons) / 3;
 		// create if idle too little
-		if (idleCons + activeCons < size && idleCons < hostConfig.getMinCon()) {
+		if ((createCount > 0) && (idleCons + activeCons < size)
+				&& (idleCons < hostConfig.getMinCon())) {
 			LOGGER.info("create connections ,because idle connection not enough ,cur is "
 					+ idleCons
 					+ ", minCon is "
 					+ hostConfig.getMinCon()
 					+ " for " + name);
-			SimpleLogHandler simpleHandler = new SimpleLogHandler();
-			lock.lock();
-			try {
-				int createCount = (hostConfig.getMinCon() - idleCons) / 3;
-				final BackendConnection[] items = this.items;
-				for (int i = 0; i < items.length; i++) {
-					if (this.getActiveCount() + this.getIdleCount() >= size) {
-						break;
-					}
-					if (items[i] == null) {
-						items[i] = new FakeConnection();
-						--createCount;
-						try {
-							// creat new connection
-							this.createNewConnection(false, simpleHandler, i,
-									null, "");
-						} catch (IOException e) {
-							LOGGER.warn("create connection err " + e);
-						}
-						if (createCount <= 0) {
-							break;
-						}
-					}
-				}
-			} finally {
-				lock.unlock();
-			}
+			NewConnectionRespHandler simpleHandler = new NewConnectionRespHandler();
 
-		} else if (idleCons > hostConfig.getMinCon() + IDLE_CLOSE_COUNT) {// too
-																			// many
-																			// idle
-			int closedCount = 0;
+			final String[] schemas = dbPool.getSchemas();
+			for (int i = 0; i < createCount; i++) {
+				if (this.getActiveCount() + this.getIdleCount() >= size) {
+					break;
+				}
+				try {
+					// creat new connection
+					this.createNewConnection(simpleHandler, null, schemas[i
+							% schemas.length]);
+				} catch (IOException e) {
+					LOGGER.warn("create connection err " + e);
+				}
+
+			}
+		} else if (getIdleCount() > hostConfig.getMinCon() + ildeCloseCount) {
+
+			LOGGER.info("too many ilde cons ,close some for datasouce  " + name);
+
 			ArrayList<BackendConnection> readyCloseCons = new ArrayList<BackendConnection>(
-					IDLE_CLOSE_COUNT);
-			for (BackendConnection idleCon : idleConList) {
-				if (closedCount < IDLE_CLOSE_COUNT) {
-					if (!idleCon.isBorrowed() && !idleCon.isClosedOrQuit()
-							&& !lock.isLocked()) {
-						lock.lock();
-						try {
-							if (!idleCon.isBorrowed()
-									&& !idleCon.isClosedOrQuit()) {
-								idleCon.setBorrowed(true);
-								readyCloseCons.add(idleCon);
-								closedCount++;
+					ildeCloseCount);
+			for (ConQueue queue : conMap.getAllConQueue()) {
+				readyCloseCons.addAll(queue.getIdleConsToClose(ildeCloseCount));
 
-							}
-						} finally {
-							lock.unlock();
-						}
-					}
+				if (readyCloseCons.size() >= ildeCloseCount) {
+					break;
 				}
+
 			}
-			for (BackendConnection realidleCon : readyCloseCons) {
-				realidleCon.close("too many idle con");
+
+			for (BackendConnection idleCon : readyCloseCons) {
+				if (idleCon.isBorrowed()) {
+					LOGGER.warn("find idle con is using " + idleCon);
+				}
+				idleCon.close("too many idle con");
+			}
+
+		} else {
+			int activeCount = this.getActiveCount();
+			if (activeCount > size) {
+				StringBuilder s = new StringBuilder();
+				s.append(Alarms.DEFAULT).append("DATASOURCE EXCEED [name=")
+						.append(name).append(",active=");
+				s.append(activeCount).append(",size=").append(size).append(']');
+				LOGGER.warn(s.toString());
 			}
 		}
 	}
 
+	public int getActiveCount() {
+		return this.conMap.getActiveCountForDs(this);
+	}
+
 	public void clearCons(String reason) {
-		final ReentrantLock lock = this.lock;
-		lock.lock();
-		try {
-			final BackendConnection[] items = this.items;
-			for (int i = 0; i < items.length; i++) {
-				BackendConnection c = items[i];
-				if (c != null) {
-					c.close(reason);
-					items[i] = null;
-				}
-			}
-		} finally {
-			lock.unlock();
-		}
+		this.conMap.clearConnections(reason, this);
 	}
 
 	public void startHeartbeat() {
@@ -314,121 +305,69 @@ public abstract class PhysicalDatasource {
 	private BackendConnection takeCon(BackendConnection conn,
 			final ResponseHandler handler, final Object attachment,
 			String schema) {
+
 		conn.setBorrowed(true);
-		if (schema != null) {
+		if (!conn.getSchema().equals(schema)) {
+			// need do schema syn in before sql send
 			conn.setSchema(schema);
 		}
-		executeCount++;
+		ConQueue queue = conMap.getSchemaConQueue(schema);
+		queue.incExecuteCount();
+		//queue.incExecuteCount();
 		conn.setAttachment(attachment);
 		handler.connectionAcquired(conn);
 		return conn;
 	}
 
-	private void createNewConnection(final boolean consume,
-			final ResponseHandler handler, final int insertIndex,
+	private void createNewConnection(final ResponseHandler handler,
 			final Object attachment, final String schema) throws IOException {
 		this.createNewConnection(new DelegateResponseHandler(handler) {
 			@Override
 			public void connectionError(Throwable e, BackendConnection conn) {
-				lock.lock();
-				try {
-					items[insertIndex] = null;
-				} finally {
-					lock.unlock();
-				}
 				handler.connectionError(e, conn);
 			}
 
 			@Override
 			public void connectionAcquired(BackendConnection conn) {
-				lock.lock();
-				try {
-					items[insertIndex] = conn;
-					if (consume) {
-						takeCon(conn, handler, attachment, schema);
-					}
-				} finally {
-					lock.unlock();
-				}
+				takeCon(conn, handler, attachment, schema);
 			}
-		});
+		}, schema);
 	}
 
 	public void getConnection(final ConnectionMeta conMeta,
 			final ResponseHandler handler, final Object attachment)
 			throws Exception {
-		int activeCount = this.getActiveCount();
-		// used to store new created connection
-		int emptyIndex = -1;
-		int bestCandidate = -1;
-		int faKeIndex = -1;
-		int bestCandidateSimilarity = -1;
-		final ReentrantLock lock = this.lock;
-		lock.lock();
-		try {
-			// get connection from pool
-			final BackendConnection[] items = this.items;
+		BackendConnection con = this.conMap.tryTakeCon(conMeta);
+		if (con != null) {
+			takeCon(con, handler, attachment, conMeta.getSchema());
+			return;
+		} else {
+			LOGGER.info("not ilde connection in pool,create new connection for "
+					+ this.name + conMeta.toString());
+			// create connection
+			createNewConnection(handler, attachment, conMeta.getSchema());
 
-			for (int i = 0; i < items.length; i++) {
-				if (emptyIndex == -1 && items[i] == null) {
-					emptyIndex = i;
-				} else if (items[i] != null) {
-					BackendConnection conn = items[i];
-					if (conn.isFake()) {
-						faKeIndex = i;
-					}
-					// closed or quit
-					if (conn.isClosedOrQuit()) {
-						items[i] = null;
-						if (emptyIndex == -1) {
-							emptyIndex = i;
-						}
-					} else if (!conn.isBorrowed()) {
-						// compare if more similary
-						int similary = conMeta.getMetaSimilarity(conn);
-						if (bestCandidateSimilarity < similary) {
-							bestCandidateSimilarity = similary;
-							bestCandidate = i;
-						}
-					}
-				}
-			}
-			if (emptyIndex == -1) {
-				emptyIndex = faKeIndex;
-			}
-			if (bestCandidate != -1) {
-				takeCon(items[bestCandidate], handler, attachment,
-						conMeta.getSchema());
-				return;
-			} else if (emptyIndex == -1) {
-				StringBuilder s = new StringBuilder();
-				s.append(Alarms.DEFAULT).append("DATASOURCE EXCEED [name=")
-						.append(name).append(",active=");
-				s.append(activeCount).append(",size=").append(size).append(']');
-				LOGGER.warn(s.toString());
-				throw new IOException("datasource is full,can't get any more "
-						+ this.getName());
-			} else {
-				// creat new connection
-				items[emptyIndex] = new FakeConnection();
-			}
-		} finally {
-			lock.unlock();
 		}
 
-		LOGGER.info("not ilde connection in pool,create new connection for "
-				+ this.name);
-		final int insertIndex = emptyIndex;
-		// create connection
-		createNewConnection(true, handler, insertIndex, attachment,
-				conMeta.getSchema());
-		return;
 	}
 
 	private void returnCon(BackendConnection c) {
 		c.setAttachment(null);
 		c.setBorrowed(false);
 		c.setLastTime(TimeUtil.currentTimeMillis());
+		ConQueue queue = this.conMap.getSchemaConQueue(c.getSchema());
+
+		boolean ok = false;
+		if (c.isAutocommit()) {
+			ok = queue.getAutoCommitCons().offer(c);
+		} else {
+			ok = queue.getManCommitCons().offer(c);
+		}
+		if (!ok) {
+
+			LOGGER.warn("can't return to pool ,so close con " + c);
+			c.close("can't return to pool ");
+		}
 	}
 
 	public void releaseChannel(BackendConnection c) {
@@ -439,8 +378,8 @@ public abstract class PhysicalDatasource {
 		returnCon(c);
 	}
 
-	public abstract void createNewConnection(ResponseHandler handler)
-			throws IOException;
+	public abstract void createNewConnection(ResponseHandler handler,
+			String schema) throws IOException;
 
 	public long getHeartbeatRecoveryTime() {
 		return heartbeatRecoveryTime;
@@ -453,190 +392,4 @@ public abstract class PhysicalDatasource {
 	public DBHostConfig getConfig() {
 		return config;
 	}
-}
-
-class FakeConnection implements BackendConnection {
-
-	@Override
-	public boolean isFake() {
-		return true;
-	}
-
-	@Override
-	public boolean isFromSlaveDB() {
-		return false;
-	}
-
-	@Override
-	public String getSchema() {
-		return null;
-	}
-
-	@Override
-	public void setSchema(String newSchema) {
-
-	}
-
-	@Override
-	public long getLastTime() {
-		return System.currentTimeMillis();
-	}
-
-	@Override
-	public boolean isClosedOrQuit() {
-		return false;
-	}
-
-	@Override
-	public void setAttachment(Object attachment) {
-
-	}
-
-	@Override
-	public void quit() {
-
-	}
-
-	@Override
-	public void setLastTime(long currentTimeMillis) {
-	}
-
-	@Override
-	public void release() {
-	}
-
-	@Override
-	public void close(String reason) {
-
-	}
-
-	@Override
-	public void setRunning(boolean running) {
-
-	}
-
-	@Override
-	public boolean setResponseHandler(ResponseHandler commandHandler) {
-		return false;
-	}
-
-	@Override
-	public void commit() {
-
-	}
-
-	@Override
-	public void query(String sql) throws UnsupportedEncodingException {
-
-	}
-
-	@Override
-	public Object getAttachment() {
-		return null;
-	}
-
-	@Override
-	public String getCharset() {
-		return null;
-	}
-
-	@Override
-	public void execute(RouteResultsetNode node, ServerConnection source,
-			boolean autocommit) throws IOException {
-
-	}
-
-	@Override
-	public void recordSql(String host, String schema, String statement) {
-
-	}
-
-	@Override
-	public boolean syncAndExcute() {
-		return false;
-	}
-
-	@Override
-	public void rollback() {
-
-	}
-
-	
-
-	
-	@Override
-	public boolean isRunning() {
-		return false;
-	}
-
-	@Override
-	public boolean isBorrowed() {
-		return true;
-	}
-
-	@Override
-	public void setBorrowed(boolean borrowed) {
-
-	}
-
-	@Override
-	public boolean isAutocommit() {
-		return false;
-	}
-
-	@Override
-	public boolean isModifiedSQLExecuted() {
-		return false;
-	}
-
-	@Override
-	public int getTxIsolation() {
-		return 0;
-	}
-
-	@Override
-	public boolean isClosed() {
-		return false;
-	}
-
-	@Override
-	public long getId() {
-		return 0;
-	}
-
-	@Override
-	public void idleCheck() {
-
-	}
-
-	@Override
-	public long getStartupTime() {
-		return 0;
-	}
-
-	@Override
-	public String getHost() {
-		return null;
-	}
-
-	@Override
-	public int getPort() {
-		return 0;
-	}
-
-	@Override
-	public int getLocalPort() {
-		return 0;
-	}
-
-	@Override
-	public long getNetInBytes() {
-		return 0;
-	}
-
-	@Override
-	public long getNetOutBytes() {
-		return 0;
-	}
-
 }

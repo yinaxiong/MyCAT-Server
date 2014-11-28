@@ -51,10 +51,11 @@ public final class ServerParse {
 	public static final int MYSQL_CMD_COMMENT = 18;
 	public static final int MYSQL_COMMENT = 19;
 	public static final int CALL = 20;
+	public static final int DESCRIBE = 21;
 
 	public static int parse(String stmt) {
-		int lenth=stmt.length();
-		for (int i = 0; i <lenth ; ++i) {
+		int lenth = stmt.length();
+		for (int i = 0; i < lenth; ++i) {
 			switch (stmt.charAt(i)) {
 			case ' ':
 			case '\t':
@@ -62,15 +63,16 @@ public final class ServerParse {
 			case '\n':
 				continue;
 			case '/':
-				//such as /*!40101 SET character_set_client = @saved_cs_client */;
-				if(i==0&&stmt.charAt(1)=='*'&&stmt.charAt(2)=='!'&&stmt.charAt(lenth-2)=='*'&&stmt.charAt(lenth-1)=='/')
-				{
+				// such as /*!40101 SET character_set_client = @saved_cs_client
+				// */;
+				if (i == 0 && stmt.charAt(1) == '*' && stmt.charAt(2) == '!'
+						&& stmt.charAt(lenth - 2) == '*'
+						&& stmt.charAt(lenth - 1) == '/') {
 					return MYSQL_CMD_COMMENT;
 				}
 			case '#':
 				i = ParseUtil.comment(stmt, i);
-				if(i+1==lenth)
-				{
+				if (i + 1 == lenth) {
 					return MYSQL_COMMENT;
 				}
 				continue;
@@ -82,7 +84,7 @@ public final class ServerParse {
 				return commitOrCallCheck(stmt, i);
 			case 'D':
 			case 'd':
-				return deleteCheck(stmt, i);
+				return dCheck(stmt, i);
 			case 'E':
 			case 'e':
 				return explainCheck(stmt, i);
@@ -221,7 +223,7 @@ public final class ServerParse {
 		}
 		return OTHER;
 	}
-	
+
 	// COMMIT
 	static int commitCheck(String stmt, int offset) {
 		if (stmt.length() > offset + 5) {
@@ -240,36 +242,35 @@ public final class ServerParse {
 				return COMMIT;
 			}
 		}
-		
+
 		return OTHER;
 	}
-	
-	//CALL
-	static int callCheck(String stmt, int  offset) {
+
+	// CALL
+	static int callCheck(String stmt, int offset) {
 		if (stmt.length() > offset + 3) {
 			char c1 = stmt.charAt(++offset);
 			char c2 = stmt.charAt(++offset);
 			char c3 = stmt.charAt(++offset);
-			if ((c1 == 'A' || c1 == 'a')
-					&& (c2 == 'L' || c2 == 'l')
+			if ((c1 == 'A' || c1 == 'a') && (c2 == 'L' || c2 == 'l')
 					&& (c3 == 'L' || c3 == 'l')) {
 				return CALL;
 			}
 		}
-		
+
 		return OTHER;
 	}
 
 	static int commitOrCallCheck(String stmt, int offset) {
 		int sqlType = OTHER;
-		switch ( stmt.charAt((offset+1)) ) {
+		switch (stmt.charAt((offset + 1))) {
 		case 'O':
 		case 'o':
 			sqlType = commitCheck(stmt, offset);
 			break;
 		case 'A':
 		case 'a':
-			sqlType = callCheck(stmt,  offset);
+			sqlType = callCheck(stmt, offset);
 			break;
 		default:
 			sqlType = OTHER;
@@ -277,8 +278,15 @@ public final class ServerParse {
 		return sqlType;
 	}
 
-	// DELETE' '
-	static int deleteCheck(String stmt, int offset) {
+	// DESCRIBE or desc or DELETE' '
+	static int dCheck(String stmt, int offset) {
+		if (stmt.length() > offset + 4) {
+			int res = describeCheck(stmt, offset);
+			if (res == DESCRIBE) {
+				return res;
+			}
+		}
+		// continue check
 		if (stmt.length() > offset + 6) {
 			char c1 = stmt.charAt(++offset);
 			char c2 = stmt.charAt(++offset);
@@ -291,6 +299,37 @@ public final class ServerParse {
 					&& (c5 == 'E' || c5 == 'e')
 					&& (c6 == ' ' || c6 == '\t' || c6 == '\r' || c6 == '\n')) {
 				return DELETE;
+			}
+		}
+		return OTHER;
+	}
+
+	// DESCRIBE' ' 或 desc' '
+	static int describeCheck(String stmt, int offset) {
+		//desc
+		if (stmt.length() > offset + 4) {
+			char c1 = stmt.charAt(++offset);
+			char c2 = stmt.charAt(++offset);
+			char c3 = stmt.charAt(++offset);
+			char c4 = stmt.charAt(++offset);
+			if ((c1 == 'E' || c1 == 'e') && (c2 == 'S' || c2 == 's')
+					&& (c3 == 'C' || c3 == 'c')
+					&& (c4 == ' ' || c4 == '\t' || c4 == '\r' || c4 == '\n')) {
+				return DESCRIBE;
+			}
+			//describe
+			if (stmt.length() > offset + 4) {
+				char c5 = stmt.charAt(++offset);
+				char c6 = stmt.charAt(++offset);
+				char c7 = stmt.charAt(++offset);
+				char c8 = stmt.charAt(++offset);
+				if ((c1 == 'E' || c1 == 'e') && (c2 == 'S' || c2 == 's')
+						&& (c3 == 'C' || c3 == 'c') && (c4 == 'R' || c4 == 'r')
+						&& (c5 == 'I' || c5 == 'i') && (c6 == 'B' || c6 == 'b')
+						&& (c7 == 'E' || c7 == 'e')
+						&& (c8 == ' ' || c8 == '\t' || c8 == '\r' || c8 == '\n')) {
+					return DESCRIBE;
+				}
 			}
 		}
 		return OTHER;

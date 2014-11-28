@@ -112,7 +112,6 @@ public class FetchStoreNodeOfChildTableHandler implements ResponseHandler {
 
 	@Override
 	public void connectionAcquired(BackendConnection conn) {
-		conn.setRunning(true);
 		conn.setResponseHandler(this);
 		try {
 			conn.query(sql);
@@ -131,12 +130,10 @@ public class FetchStoreNodeOfChildTableHandler implements ResponseHandler {
 	@Override
 	public void errorResponse(byte[] data, BackendConnection conn) {
 		finished.incrementAndGet();
-		conn.setRunning(false);
 		ErrorPacket err = new ErrorPacket();
 		err.read(data);
 		LOGGER.warn("errorResponse " + err.errno + " "
 				+ new String(err.message));
-		conn.setRunning(false);
 		conn.release();
 
 	}
@@ -146,7 +143,6 @@ public class FetchStoreNodeOfChildTableHandler implements ResponseHandler {
 		boolean executeResponse = conn.syncAndExcute();
 		if (executeResponse) {
 			finished.incrementAndGet();
-			conn.setRunning(false);
 			conn.release();
 		}
 
@@ -154,13 +150,12 @@ public class FetchStoreNodeOfChildTableHandler implements ResponseHandler {
 
 	@Override
 	public void rowResponse(byte[] row, BackendConnection conn) {
+		if (LOGGER.isDebugEnabled()) {
+			LOGGER.debug("received rowResponse response," + getColumn(row)
+					+ " from  " + conn);
+		}
 		if (result == null) {
-
-			RowDataPacket rowDataPkg = new RowDataPacket(1);
-			rowDataPkg.read(row);
-			byte[] columnData = rowDataPkg.fieldValues.get(0);
-			String columnVal = new String(columnData);
-			result = columnVal;
+			result = getColumn(row);
 			dataNode = (String) conn.getAttachment();
 		} else {
 			LOGGER.warn("find multi data nodes for child table store, sql is:  "
@@ -169,17 +164,22 @@ public class FetchStoreNodeOfChildTableHandler implements ResponseHandler {
 
 	}
 
+	private String getColumn(byte[] row) {
+		RowDataPacket rowDataPkg = new RowDataPacket(1);
+		rowDataPkg.read(row);
+		byte[] columnData = rowDataPkg.fieldValues.get(0);
+		return new String(columnData);
+	}
+
 	@Override
 	public void rowEofResponse(byte[] eof, BackendConnection conn) {
 		finished.incrementAndGet();
-		conn.setRunning(false);
 		conn.release();
 	}
 
 	private void executeException(BackendConnection c, Throwable e) {
 		finished.incrementAndGet();
 		LOGGER.warn("executeException   " + e);
-		c.setRunning(false);
 		c.close("exception:" + e);
 
 	}

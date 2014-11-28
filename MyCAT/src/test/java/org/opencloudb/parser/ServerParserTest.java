@@ -140,23 +140,23 @@ public class ServerParserTest {
     }
 
     @Test
-    public void testShowCobarStatus() {
-        Assert.assertEquals(ServerParseShow.COBAR_STATUS, ServerParseShow.parse("show cobar_status", 4));
-        Assert.assertEquals(ServerParseShow.COBAR_STATUS, ServerParseShow.parse("show cobar_status ", 4));
-        Assert.assertEquals(ServerParseShow.COBAR_STATUS, ServerParseShow.parse(" SHOW COBAR_STATUS", " SHOW".length()));
-        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse(" show cobar_statu", " SHOW".length()));
-        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse(" show cobar_status2", " SHOW".length()));
-        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse("Show cobar_status2 ", "SHOW".length()));
+    public void testShowMycatStatus() {
+        Assert.assertEquals(ServerParseShow.MYCAT_STATUS, ServerParseShow.parse("show mycat_status", 4));
+        Assert.assertEquals(ServerParseShow.MYCAT_STATUS, ServerParseShow.parse("show mycat_status ", 4));
+        Assert.assertEquals(ServerParseShow.MYCAT_STATUS, ServerParseShow.parse(" SHOW MYCAT_STATUS", " SHOW".length()));
+        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse(" show mycat_statu", " SHOW".length()));
+        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse(" show mycat_status2", " SHOW".length()));
+        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse("Show mycat_status2 ", "SHOW".length()));
     }
 
     @Test
-    public void testShowCobarCluster() {
-        Assert.assertEquals(ServerParseShow.COBAR_CLUSTER, ServerParseShow.parse("show cobar_cluster", 4));
-        Assert.assertEquals(ServerParseShow.COBAR_CLUSTER, ServerParseShow.parse("Show cobar_CLUSTER ", 4));
-        Assert.assertEquals(ServerParseShow.COBAR_CLUSTER, ServerParseShow.parse(" show  COBAR_cluster", 5));
-        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse(" show cobar_clust", 5));
-        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse(" show cobar_cluster2", 5));
-        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse("Show COBAR_cluster9 ", 4));
+    public void testShowMycatCluster() {
+        Assert.assertEquals(ServerParseShow.MYCAT_CLUSTER, ServerParseShow.parse("show mycat_cluster", 4));
+        Assert.assertEquals(ServerParseShow.MYCAT_CLUSTER, ServerParseShow.parse("Show mycat_CLUSTER ", 4));
+        Assert.assertEquals(ServerParseShow.MYCAT_CLUSTER, ServerParseShow.parse(" show  MYCAT_cluster", 5));
+        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse(" show mycat_clust", 5));
+        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse(" show mycat_cluster2", 5));
+        Assert.assertEquals(ServerParseShow.OTHER, ServerParseShow.parse("Show mycat_cluster9 ", 4));
     }
 
     @Test

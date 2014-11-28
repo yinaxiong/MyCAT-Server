@@ -23,7 +23,6 @@
  */
 package org.opencloudb.net.handler;
 
-import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -37,12 +36,14 @@ public abstract class BackendAsyncHandler implements NIOHandler {
 	protected final LinkedBlockingQueue<byte[]> dataQueue = new LinkedBlockingQueue<byte[]>();
 	protected final AtomicBoolean isHandling = new AtomicBoolean(false);
 
-	protected void offerData(byte[] data, Executor executor) {
-		if (dataQueue.offer(data)) {
-			handleQueue();
-		} else {
-			offerDataError();
-		}
+	protected void offerData(byte[] data) {
+		//only one thread handle data and data read finshed ,then start other read/write event (asyn Read/Write) 
+		handleData(data);
+//		if (dataQueue.offer(data)) {
+//			handleQueue();
+//		} else {
+//			offerDataError();
+//		}
 	}
 
 	protected abstract void offerDataError();

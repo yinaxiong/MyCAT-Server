@@ -35,8 +35,6 @@ import org.opencloudb.net.FrontendConnection;
  */
 public abstract class FrontendConnectionFactory {
 
-	protected int socketRecvBuffer = 8 * 1024;
-	protected int socketSendBuffer = 16 * 1024;
 	protected int packetHeaderSize = 4;
 	protected int maxPacketSize = 16 * 1024 * 1024;
 	protected int writeQueueCapcity = 16;
@@ -44,38 +42,19 @@ public abstract class FrontendConnectionFactory {
 	protected String charset = "utf8";
 
 	protected abstract FrontendConnection getConnection(
-			AsynchronousSocketChannel channel) throws IOException ;
+			AsynchronousSocketChannel channel) throws IOException;
 
 	public FrontendConnection make(AsynchronousSocketChannel channel)
 			throws IOException {
-		channel.setOption(StandardSocketOptions.SO_RCVBUF, socketRecvBuffer);
-		channel.setOption(StandardSocketOptions.SO_SNDBUF, socketSendBuffer);
-		channel.setOption(StandardSocketOptions.TCP_NODELAY, true);
+		channel.setOption(StandardSocketOptions.SO_REUSEADDR, true);
 		channel.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
 
 		FrontendConnection c = getConnection(channel);
 		c.setPacketHeaderSize(packetHeaderSize);
 		c.setMaxPacketSize(maxPacketSize);
-		c.setWriteQueue(new BufferQueue(writeQueueCapcity));
 		c.setIdleTimeout(idleTimeout);
 		c.setCharset(charset);
 		return c;
-	}
-
-	public int getSocketRecvBuffer() {
-		return socketRecvBuffer;
-	}
-
-	public void setSocketRecvBuffer(int socketRecvBuffer) {
-		this.socketRecvBuffer = socketRecvBuffer;
-	}
-
-	public int getSocketSendBuffer() {
-		return socketSendBuffer;
-	}
-
-	public void setSocketSendBuffer(int socketSendBuffer) {
-		this.socketSendBuffer = socketSendBuffer;
 	}
 
 	public int getPacketHeaderSize() {

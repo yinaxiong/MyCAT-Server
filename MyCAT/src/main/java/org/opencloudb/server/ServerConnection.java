@@ -26,21 +26,15 @@ package org.opencloudb.server;
 import java.io.IOException;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.sql.SQLNonTransientException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.log4j.Logger;
 import org.opencloudb.MycatServer;
 import org.opencloudb.config.ErrorCode;
 import org.opencloudb.config.model.SchemaConfig;
-import org.opencloudb.config.model.SystemConfig;
-import org.opencloudb.config.model.TableConfig;
 import org.opencloudb.net.FrontendConnection;
 import org.opencloudb.route.RouteResultset;
-import org.opencloudb.route.SessionSQLPair;
-import org.opencloudb.server.parser.ServerParse;
 import org.opencloudb.server.response.Heartbeat;
 import org.opencloudb.server.response.Ping;
-import org.opencloudb.util.StringUtil;
 import org.opencloudb.util.TimeUtil;
 
 /**
@@ -58,8 +52,6 @@ public class ServerConnection extends FrontendConnection {
 	private long lastInsertId;
 	private NonBlockingSession session;
 
-	private AtomicBoolean hasOkRsp = new AtomicBoolean(false);  //表示在Data返回后还有OK Packet报文的语句
-	
 	public ServerConnection(AsynchronousSocketChannel channel)
 			throws IOException {
 		super(channel);
@@ -155,56 +147,8 @@ public class ServerConnection extends FrontendConnection {
 					"Unknown MyCAT Database '" + db + "'");
 			return;
 		}
-		// 检查是否有全局序列号的，需要异步处理
-		// @micmiu 简单模糊判断SQL是否包含sequence
-		boolean isNeedSequence = false;
 
-		if (sql.indexOf(" MYCATSEQ_") != -1) {
-			SessionSQLPair pair = new SessionSQLPair(session, schema, sql,type);
-			MycatServer.getInstance().getSequnceProcessor().addNewSql(pair);
-			isNeedSequence = true;
-		} 
-		
-		if ( type == ServerParse.INSERT  && !isNeedSequence ) {
-				String tableName = StringUtil.getMiddleString(sql.toUpperCase(), "INTO ", "(");
-				TableConfig tableConfig = schema.getTables().get(tableName);
-				if ( null != tableConfig && tableConfig.isAutoIncrement() ) {
-					String primaryKey = tableConfig.getPrimaryKey();
-					int firstLeftBracketIndex = sql.indexOf("(")+1;
-					int firstRightBracketIndex = sql.indexOf(")");
-					int lastLeftBracketIndex = sql.lastIndexOf("(")+1;
-					String insertFieldsSQL = sql.substring(firstLeftBracketIndex, firstRightBracketIndex);
-					String[] insertFields = insertFieldsSQL.split(",");
-					
-					boolean isPrimaryKeyInFields = false;
-					for (String field : insertFields) {
-						if (field.toUpperCase().equals(primaryKey)){
-							isPrimaryKeyInFields = true;
-							break;
-						}
-					}
-					if ( !isPrimaryKeyInFields ) {
-						StringBuilder sb = new StringBuilder();
-						sb.append(sql.substring(0,firstLeftBracketIndex));
-						sb.append(primaryKey);
-						sb.append(",");
-						sb.append(sql.substring(firstLeftBracketIndex,lastLeftBracketIndex));
-						sb.append("next value for MYCATSEQ_");
-						sb.append(tableName);
-						sb.append(",");
-						sb.append(sql.substring(lastLeftBracketIndex, sql.length()));
-
-						SessionSQLPair pair = new SessionSQLPair(session, schema, sb.toString(),type);
-						MycatServer.getInstance().getSequnceProcessor().addNewSql(pair);
-						isNeedSequence = true;
-					}
-				} else {
-					isNeedSequence = false;
-				}
-		}
-		if ( !isNeedSequence ) {
-			routeEndExecuteSQL(sql, type, schema);
-		}
+		routeEndExecuteSQL(sql, type, schema);
 
 	}
 
@@ -217,8 +161,7 @@ public class ServerConnection extends FrontendConnection {
 					.getRouterservice()
 					.route(MycatServer.getInstance().getConfig().getSystem(),
 							schema, type, sql, this.charset, this);
-			
-			hasOkRsp.set(rrs.isCallStatement());
+
 		} catch (SQLNonTransientException e) {
 			StringBuilder s = new StringBuilder();
 			LOGGER.warn(s.append(this).append(sql).toString() + " err:"
@@ -228,9 +171,10 @@ public class ServerConnection extends FrontendConnection {
 					.getClass().getSimpleName() : msg);
 			return;
 		}
-
-		// session执行
-		session.execute(rrs, type);
+		if (rrs != null) {
+			// session执行
+			session.execute(rrs, type);
+		}
 	}
 
 	/**
@@ -275,29 +219,16 @@ public class ServerConnection extends FrontendConnection {
 
 	@Override
 	public void close(String reason) {
-
 		super.close(reason);
-		this.session.clearResources();
-		if (this.isClosed()) {
-			processor.getExecutor().execute(new Runnable() {
-				@Override
-				public void run() {
-					session.terminate();
-				}
-			});
-			return;
-		}
-	}
+		session.terminate();
 
-	
-	public AtomicBoolean isHasOkRsp() {
-		return hasOkRsp;
 	}
 
 	@Override
 	public String toString() {
-		return "ServerConnection [id=" +id +  ", schema=" +schema +", host="+ host +", user="+ user +",txIsolation=" + txIsolation + ", autocommit="
-				+ autocommit + ", schema=" +schema + "]";
+		return "ServerConnection [id=" + id + ", schema=" + schema + ", host="
+				+ host + ", user=" + user + ",txIsolation=" + txIsolation
+				+ ", autocommit=" + autocommit + ", schema=" + schema + "]";
 	}
 
 }

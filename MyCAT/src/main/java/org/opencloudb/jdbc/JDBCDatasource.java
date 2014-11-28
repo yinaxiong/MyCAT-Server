@@ -23,7 +23,7 @@ public class JDBCDatasource extends PhysicalDatasource {
 	}
 
 	@Override
-	public void createNewConnection(ResponseHandler handler) throws IOException {
+	public void createNewConnection(ResponseHandler handler,String schema) throws IOException {
 		DBHostConfig dsc = getConfig();
 		JDBCConnection c = new JDBCConnection();
 

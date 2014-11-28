@@ -44,16 +44,11 @@ public class KillConnectionHandler implements ResponseHandler {
 
 	private final MySQLConnection killee;
 	private final NonBlockingSession session;
-	private final Runnable finishHook;
-	private final AtomicInteger counter;
 
 	public KillConnectionHandler(BackendConnection killee,
-			NonBlockingSession session, Runnable finishHook,
-			AtomicInteger counter) {
+			NonBlockingSession session) {
 		this.killee = (MySQLConnection) killee;
 		this.session = session;
-		this.finishHook = finishHook;
-		this.counter = counter;
 	}
 
 	@Override
@@ -68,16 +63,9 @@ public class KillConnectionHandler implements ResponseHandler {
 		packet.write(mysqlCon);
 	}
 
-	private void finished() {
-		if (counter.decrementAndGet() <= 0) {
-			finishHook.run();
-		}
-	}
-
 	@Override
 	public void connectionError(Throwable e, BackendConnection conn) {
 		killee.close("exception:" + e.toString());
-		finished();
 	}
 
 	@Override
@@ -88,17 +76,16 @@ public class KillConnectionHandler implements ResponseHandler {
 		}
 		conn.release();
 		killee.close("killed");
-		finished();
+
 	}
 
 	@Override
 	public void rowEofResponse(byte[] eof, BackendConnection conn) {
-		LOGGER.error(new StringBuilder().append("unexpected packet for ")
+		LOGGER.warn(new StringBuilder().append("unexpected packet for ")
 				.append(conn).append(" bound by ").append(session.getSource())
 				.append(": field's eof").toString());
 		conn.quit();
 		killee.close("killed");
-		finished();
 	}
 
 	@Override
@@ -115,7 +102,6 @@ public class KillConnectionHandler implements ResponseHandler {
 				+ " con:" + conn);
 		conn.release();
 		killee.close("exception:" + msg);
-		finished();
 	}
 
 	@Override
@@ -134,8 +120,6 @@ public class KillConnectionHandler implements ResponseHandler {
 
 	@Override
 	public void connectionClose(BackendConnection conn, String reason) {
-		finished();
-
 	}
 
 }

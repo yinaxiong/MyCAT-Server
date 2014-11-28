@@ -25,7 +25,7 @@ package org.opencloudb.buffer;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.apache.log4j.Logger;
 
@@ -33,127 +33,96 @@ import org.apache.log4j.Logger;
  * @author mycat
  */
 public final class BufferPool {
+	private static final ThreadLocalBufferPool localBufferPool = new ThreadLocalBufferPool(
+			4000);
 	private static final Logger LOGGER = Logger.getLogger(BufferPool.class);
 	private final int chunkSize;
-	private final ByteBuffer[] items;
-	private final ReentrantLock lock;
-	private int putIndex;
-	private int takeIndex;
-	private int count;
-	private volatile int newCount;
-
-	public BufferPool(int bufferSize, int chunkSize) {
+	private final ConcurrentLinkedQueue<ByteBuffer> items = new ConcurrentLinkedQueue<ByteBuffer>();
+	private long sharedOptsCount;
+	private volatile int newCreated;
+	private final int threadLocalCount;
+	private final int capactiy;
+	private long  totalBytes = 0;
+	private long  totalCounts = 0;
+	public BufferPool(int bufferSize, int chunkSize, int threadLocalPercent) {
 		this.chunkSize = chunkSize;
-		int capacity = bufferSize / chunkSize;
-		capacity = (bufferSize % chunkSize == 0) ? capacity : capacity + 1;
-		this.items = new ByteBuffer[capacity];
-		this.lock = new ReentrantLock();
-		for (int i = 0; i < capacity; i++) {
-			insert(createDirectBuffer(chunkSize));
+		int size = bufferSize / chunkSize;
+		size = (bufferSize % chunkSize == 0) ? size : size + 1;
+		this.capactiy = size;
+		threadLocalCount = threadLocalPercent * capactiy / 100;
+		for (int i = 0; i < capactiy; i++) {
+			items.offer(createDirectBuffer(chunkSize));
 		}
 	}
 
-	public int capacity() {
-		return items.length;
+	public long getSharedOptsCount() {
+		return sharedOptsCount;
 	}
 
 	public int size() {
-		return count;
+		return this.items.size();
 	}
 
-	public int getNewCount() {
-		return newCount;
+	public int capacity() {
+		return capactiy + newCreated;
 	}
 
 	public ByteBuffer allocate() {
-		ByteBuffer node = null;
-		final ReentrantLock lock = this.lock;
-		lock.lock();
-		try {
-			node = (count == 0) ? null : extract();
-		} finally {
-			lock.unlock();
-		}
-		if (node == null) {
-			++newCount;
-			LOGGER.warn("pool is full ,allocate tempory buffer ,total alloccated times:"
-					+ newCount);
-			return createTempBuffer(chunkSize);
-		} else {
+		// allocate from threadlocal
+		ByteBuffer node = localBufferPool.get().poll();
+		if (node != null) {
 			return node;
 		}
-	}
-
-	/**
-	 * check if buffer already recycled ,only used when not sure if a buffer
-	 * already recycled
-	 * 
-	 * @param buffer
-	 */
-	public void safeRecycle(ByteBuffer buffer) {
-		checkValidBuffer(buffer);
-		final boolean debug = LOGGER.isDebugEnabled();
-		final ReentrantLock lock = this.lock;
-		lock.lock();
-		try {
-			if (testIfDuplicate(buffer)) {
-				if (debug) {
-					LOGGER.debug("already recycled buffer ");
-				}
-				return;
-			}
-			recycleBuffer(buffer);
-		} finally {
-			lock.unlock();
+		node = items.poll();
+		if (node == null) {
+			newCreated++;
+			node = this.createDirectBuffer(chunkSize);
 		}
+		return node;
 	}
 
-	private void checkValidBuffer(ByteBuffer buffer) {
+	private boolean checkValidBuffer(ByteBuffer buffer) {
 		// 拒绝回收null和容量大于chunkSize的缓存
 		if (buffer == null || !buffer.isDirect()) {
-			return;
+			return false;
 		} else if (buffer.capacity() > chunkSize) {
-			buffer.clear();
 			LOGGER.warn("cant' recycle  a buffer large than my pool chunksize "
 					+ buffer.capacity());
-			return;
+			return false;
 		}
+		totalCounts++;
+		totalBytes+=buffer.limit();
+		buffer.clear();
+		return true;
 	}
 
 	public void recycle(ByteBuffer buffer) {
-		if (buffer == null) {
+		if (!checkValidBuffer(buffer)) {
 			return;
 		}
-		checkValidBuffer(buffer);
-		recycleBuffer(buffer);
-	}
 
-	private void recycleBuffer(ByteBuffer buffer) {
-		final ReentrantLock lock = this.lock;
-		lock.lock();
-		try {
-			// reportDuplicate(buffer);
-			if (count != items.length) {
-				buffer.clear();
-				insert(buffer);
-
-			} else {
-				if (LOGGER.isDebugEnabled()) {
-					LOGGER.debug("can't recycle  buffer ,pool is full ");
-				}
-
-			}
-		} finally {
-			lock.unlock();
+		BufferQueue localQueue = localBufferPool.get();
+		if (localQueue.snapshotSize() < threadLocalCount) {
+			localQueue.put(buffer);
+		} else {
+			// recyle 2/3 thread local buffer
+			items.addAll(localQueue.removeItems(threadLocalCount * 3 / 4));
+			items.offer(buffer);
+			sharedOptsCount++;
 		}
+
 	}
 
-	private void insert(ByteBuffer buffer) {
-		items[putIndex] = buffer;
-
-		putIndex = inc(putIndex);
-		++count;
-
+	public int getAvgBufSize() {
+		if(this.totalBytes<0)
+		{
+			totalBytes=0;
+			this.totalCounts=0;
+			return 0;
+		}else
+		{
+			return (int) (totalBytes / totalCounts);
+		}
 	}
 
 	public boolean testIfDuplicate(ByteBuffer buffer) {
@@ -164,19 +133,6 @@ public final class BufferPool {
 		}
 		return false;
 
-	}
-
-	private ByteBuffer extract() {
-		final ByteBuffer[] items = this.items;
-		ByteBuffer item = items[takeIndex];
-		items[takeIndex] = null;
-		takeIndex = inc(takeIndex);
-		--count;
-		return item;
-	}
-
-	private int inc(int i) {
-		return (++i == items.length) ? 0 : i;
 	}
 
 	private ByteBuffer createTempBuffer(int size) {
@@ -199,7 +155,7 @@ public final class BufferPool {
 	}
 
 	public static void main(String[] args) {
-		BufferPool pool = new BufferPool(1024 * 5, 1024);
+		BufferPool pool = new BufferPool(1024 * 5, 1024, 2);
 		int i = pool.capacity();
 		ArrayList<ByteBuffer> all = new ArrayList<ByteBuffer>();
 		for (int j = 0; j <= i; j++) {

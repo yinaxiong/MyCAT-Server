@@ -37,7 +37,6 @@ public abstract class BackendConnectionFactory {
 	protected AsynchronousSocketChannel openSocketChannel() throws IOException {
 		AsynchronousSocketChannel channel = AsynchronousSocketChannel
 				.open(MycatServer.getInstance().getNextAsyncChannelGroup());
-		channel.setOption(StandardSocketOptions.TCP_NODELAY, true);
 		channel.setOption(StandardSocketOptions.SO_REUSEADDR, true);
 		channel.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
 

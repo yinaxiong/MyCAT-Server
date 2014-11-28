@@ -26,11 +26,9 @@ package org.opencloudb.response;
 import java.nio.ByteBuffer;
 
 import org.opencloudb.MycatServer;
-import org.opencloudb.buffer.BufferQueue;
 import org.opencloudb.config.Fields;
 import org.opencloudb.manager.ManagerConnection;
 import org.opencloudb.mysql.PacketUtil;
-import org.opencloudb.mysql.nio.MySQLConnection;
 import org.opencloudb.net.FrontendConnection;
 import org.opencloudb.net.NIOProcessor;
 import org.opencloudb.net.mysql.EOFPacket;
@@ -163,14 +161,12 @@ public final class ShowConnection {
 				.getStartupTime()) / 1000L));
 		ByteBuffer bb = c.getReadBuffer();
 		row.add(IntegerUtil.toBytes(bb == null ? 0 : bb.capacity()));
-		BufferQueue bq = c.getWriteQueue();
-		row.add(IntegerUtil.toBytes(bq == null ? 0 : bq.snapshotSize()));
+		row.add(IntegerUtil.toBytes(c.getWriteQueue().size()));
 
 		String txLevel = "";
 		String txAutommit = "";
 		if (c instanceof ServerConnection) {
 			ServerConnection mysqlC = (ServerConnection) c;
-			bq = mysqlC.getWriteQueue();
 			txLevel = mysqlC.getTxIsolation() + "";
 			txAutommit = mysqlC.isAutocommit() + "";
 		}

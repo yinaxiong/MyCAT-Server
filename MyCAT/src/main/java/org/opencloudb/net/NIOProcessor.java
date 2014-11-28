@@ -28,30 +28,32 @@ import java.util.Iterator;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
 
+import org.apache.log4j.Logger;
+import org.opencloudb.MycatServer;
 import org.opencloudb.backend.BackendConnection;
 import org.opencloudb.buffer.BufferPool;
 import org.opencloudb.statistic.CommandCount;
+import org.opencloudb.util.NameableExecutor;
 
 /**
  * @author mycat
  */
 public final class NIOProcessor {
+	private static final Logger LOGGER = Logger.getLogger("NIOProcessor");
 	private final String name;
 	private final BufferPool bufferPool;
-	// private final NameableExecutor handler;
-	private final ExecutorService executor;
+	private final NameableExecutor executor;
 	private final ConcurrentMap<Long, FrontendConnection> frontends;
 	private final ConcurrentMap<Long, BackendConnection> backends;
 	private final CommandCount commands;
 	private long netInBytes;
 	private long netOutBytes;
 
-	public NIOProcessor(String name, int bufferPoolSize, int bufferchunk,
-			ExecutorService executor) throws IOException {
+	public NIOProcessor(String name, BufferPool bufferPool,
+			NameableExecutor executor) throws IOException {
 		this.name = name;
-		this.bufferPool = new BufferPool(bufferPoolSize, bufferchunk);
+		this.bufferPool = bufferPool;
 		this.executor = executor;
 		this.frontends = new ConcurrentHashMap<Long, FrontendConnection>();
 		this.backends = new ConcurrentHashMap<Long, BackendConnection>();
@@ -69,19 +71,18 @@ public final class NIOProcessor {
 	public int getWriteQueueSize() {
 		int total = 0;
 		for (FrontendConnection fron : frontends.values()) {
-			total += fron.getWriteQueue().snapshotSize();
+			total += fron.getWriteQueue().size();
 		}
 		for (BackendConnection back : backends.values()) {
 			if (back instanceof BackendAIOConnection) {
-				total += ((BackendAIOConnection) back).getWriteQueue()
-						.snapshotSize();
+				total += ((BackendAIOConnection) back).getWriteQueue().size();
 			}
 		}
 		return total;
 
 	}
 
-	public ExecutorService getExecutor() {
+	public NameableExecutor getExecutor() {
 		return executor;
 	}
 
@@ -160,15 +161,25 @@ public final class NIOProcessor {
 
 	// 后端连接检查
 	private void backendCheck() {
+		long sqlTimeout = MycatServer.getInstance().getConfig().getSystem()
+				.getSqlExecuteTimeout() * 1000L;
 		Iterator<Entry<Long, BackendConnection>> it = backends.entrySet()
 				.iterator();
 		while (it.hasNext()) {
 			BackendConnection c = it.next().getValue();
 
 			// 删除空连接
-			if (c == null|| c.isFake()) {
+			if (c == null || c.isFake()) {
 				it.remove();
 				continue;
+			}
+			// SQL执行超时的连接关闭
+			if (c.isBorrowed()
+					&& c.getLastTime() < System.currentTimeMillis()
+							- sqlTimeout) {
+				LOGGER.warn("found backend connection SQL timeout ,close it "
+						+ c);
+				c.close("sql timeout");
 			}
 
 			// 清理已关闭连接，否则空闲检查。

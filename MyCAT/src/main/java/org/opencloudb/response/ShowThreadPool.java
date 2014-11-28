@@ -86,15 +86,15 @@ public final class ShowThreadPool {
 		ByteBuffer buffer = c.allocate();
 
 		// write header
-		buffer = header.write(buffer, c,true);
+		buffer = header.write(buffer, c, true);
 
 		// write fields
 		for (FieldPacket field : fields) {
-			buffer = field.write(buffer, c,true);
+			buffer = field.write(buffer, c, true);
 		}
 
 		// write eof
-		buffer = eof.write(buffer, c,true);
+		buffer = eof.write(buffer, c, true);
 
 		// write rows
 		byte packetId = eof.packetId;
@@ -103,14 +103,14 @@ public final class ShowThreadPool {
 			if (exec != null) {
 				RowDataPacket row = getRow(exec, c.getCharset());
 				row.packetId = ++packetId;
-				buffer = row.write(buffer, c,true);
+				buffer = row.write(buffer, c, true);
 			}
 		}
 
 		// write last eof
 		EOFPacket lastEof = new EOFPacket();
 		lastEof.packetId = ++packetId;
-		buffer = lastEof.write(buffer, c,true);
+		buffer = lastEof.write(buffer, c, true);
 
 		// write buffer
 		c.write(buffer);
@@ -130,8 +130,12 @@ public final class ShowThreadPool {
 	private static List<NameableExecutor> getExecutors() {
 		List<NameableExecutor> list = new LinkedList<NameableExecutor>();
 		MycatServer server = MycatServer.getInstance();
-		list.add(server.getTimerExecutor());
-		list.add(server.geAIOExecutor());
+		// list.add(server.getTimerExecutor());
+		// list.add(server.getAioExecutor());
+		list.add(server.getBusinessExecutor());
+		// for (NIOProcessor pros : server.getProcessors()) {
+		// list.add(pros.getExecutor());
+		// }
 		return list;
 	}
 }

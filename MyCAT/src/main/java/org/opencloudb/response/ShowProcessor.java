@@ -82,7 +82,7 @@ public final class ShowProcessor {
         fields[i] = PacketUtil.getField("BU_PERCENT", Fields.FIELD_TYPE_TINY);
         fields[i++].packetId = ++packetId;
 
-        fields[i] = PacketUtil.getField("BU_WARNS", Fields.FIELD_TYPE_TINY);
+        fields[i] = PacketUtil.getField("BU_WARNS", Fields.FIELD_TYPE_LONG);
         fields[i++].packetId = ++packetId;
         
         fields[i] = PacketUtil.getField("FC_COUNT", Fields.FIELD_TYPE_LONG);
@@ -129,7 +129,7 @@ public final class ShowProcessor {
     	BufferPool bufferPool=processor.getBufferPool();
     	int bufferSize=bufferPool.size();
     	int bufferCapacity=bufferPool.capacity();
-    	int bufferTempLocatedTimes=bufferPool.getNewCount();
+    	long bufferSharedOpts=bufferPool.getSharedOptsCount();
     	int bufferUsagePercent=(bufferCapacity-bufferSize)*100/bufferCapacity;
         RowDataPacket row = new RowDataPacket(FIELD_COUNT);
         row.add(processor.getName().getBytes());
@@ -141,7 +141,7 @@ public final class ShowProcessor {
         row.add(IntegerUtil.toBytes(bufferSize));
         row.add(IntegerUtil.toBytes(bufferCapacity));
         row.add(IntegerUtil.toBytes(bufferUsagePercent));
-        row.add(IntegerUtil.toBytes(bufferTempLocatedTimes));
+        row.add(LongUtil.toBytes(bufferSharedOpts));
         row.add(IntegerUtil.toBytes(processor.getFrontends().size()));
         row.add(IntegerUtil.toBytes(processor.getBackends().size()));
         return row;

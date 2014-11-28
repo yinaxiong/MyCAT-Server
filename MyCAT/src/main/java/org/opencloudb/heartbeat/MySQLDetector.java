@@ -77,6 +77,7 @@ public class MySQLDetector extends BackendAIOConnection {
 	public void setHeartbeat(MySQLHeartbeat heartbeat) {
 		this.heartbeat = heartbeat;
 	}
+
 	public String getCharset() {
 		return charset;
 	}
@@ -176,8 +177,7 @@ public class MySQLDetector extends BackendAIOConnection {
 				packet.arg = sql.getBytes();
 				packet.write(this);
 			}
-		}
-		else {
+		} else {
 			// System.out.println("auth ");
 			authenticate();
 		}
@@ -205,10 +205,11 @@ public class MySQLDetector extends BackendAIOConnection {
 				+ this);
 		switch (errCode) {
 		case ErrorCode.ERR_HANDLE_DATA:
-			heartbeat.setResult(MySQLHeartbeat.ERROR_STATUS, this, false,"heartbeat transfererr");
+			heartbeat.setResult(MySQLHeartbeat.ERROR_STATUS, this, false,
+					"heartbeat transfererr");
 			break;
 		default:
-			heartbeat.setResult(MySQLHeartbeat.ERROR_STATUS, this, true,null);
+			heartbeat.setResult(MySQLHeartbeat.ERROR_STATUS, this, true, null);
 		}
 	}
 
@@ -269,8 +270,9 @@ public class MySQLDetector extends BackendAIOConnection {
 
 	@Override
 	public void onConnectFailed(Throwable e) {
-		heartbeat.setResult(MySQLHeartbeat.ERROR_STATUS, this, true,"hearbeat connecterr");	
-		
+		heartbeat.setResult(MySQLHeartbeat.ERROR_STATUS, this, true,
+				"hearbeat connecterr");
+
 	}
 
 	@Override
@@ -295,25 +297,17 @@ public class MySQLDetector extends BackendAIOConnection {
 
 	@Override
 	public void setAttachment(Object attachment) {
-		
+
 	}
 
 	@Override
 	public void setLastTime(long currentTimeMillis) {
-	
-		
+
 	}
 
 	@Override
 	public void release() {
-	
-		
-	}
 
-	@Override
-	public void setRunning(boolean running) {
-		
-		
 	}
 
 	@Override
@@ -323,12 +317,12 @@ public class MySQLDetector extends BackendAIOConnection {
 
 	@Override
 	public void commit() {
-		
+
 	}
 
 	@Override
 	public void query(String sql) throws UnsupportedEncodingException {
-		
+
 	}
 
 	@Override
@@ -336,16 +330,15 @@ public class MySQLDetector extends BackendAIOConnection {
 		return null;
 	}
 
-
 	@Override
 	public void execute(RouteResultsetNode node, ServerConnection source,
 			boolean autocommit) throws IOException {
-		
+
 	}
 
 	@Override
 	public void recordSql(String host, String schema, String statement) {
-		
+
 	}
 
 	@Override
@@ -355,12 +348,7 @@ public class MySQLDetector extends BackendAIOConnection {
 
 	@Override
 	public void rollback() {
-		
-	}
 
-	@Override
-	public boolean isRunning() {
-		return false;
 	}
 
 	@Override
@@ -370,7 +358,7 @@ public class MySQLDetector extends BackendAIOConnection {
 
 	@Override
 	public void setBorrowed(boolean borrowed) {
-		
+
 	}
 
 	@Override

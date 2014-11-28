@@ -46,7 +46,7 @@ public final class RouteResultset implements Serializable {
 	private int limitSize;
 	private SQLMerge sqlMerge;
 
-	private Boolean callStatement = false; // 处理call关键字
+	private boolean callStatement = false; // 处理call关键字
 
 	// 是否为全局表，只有在insert、update、delete、ddl里会判断并修改。默认不是全局表，用于修正全局表修改数据的反馈。
 	private boolean globalTableFlag = false;
@@ -202,11 +202,11 @@ public final class RouteResultset implements Serializable {
 		this.statement = statement;
 	}
 
-	public Boolean isCallStatement() {
+	public boolean isCallStatement() {
 		return callStatement;
 	}
 
-	public void setCallStatement(Boolean callStatement) {
+	public void setCallStatement(boolean callStatement) {
 		this.callStatement = callStatement;
 	}
 

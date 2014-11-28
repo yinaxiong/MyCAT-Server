@@ -40,12 +40,12 @@ public class ServerConnectionFactory extends FrontendConnectionFactory {
     @Override
     protected FrontendConnection getConnection(AsynchronousSocketChannel channel) throws IOException {
         SystemConfig sys = MycatServer.getInstance().getConfig().getSystem();
+		MycatServer.getInstance().getConfig().setSocketParams(channel, true);
         ServerConnection c = new ServerConnection(channel);
         c.setPrivileges(new MycatPrivileges());
         c.setQueryHandler(new ServerQueryHandler(c));
         // c.setPrepareHandler(new ServerPrepareHandler(c)); TODO prepare
         c.setTxIsolation(sys.getTxIsolation());
-        //c.setSession(new BlockingSession(c));
         c.setSession2(new NonBlockingSession(c));
         return c;
     }

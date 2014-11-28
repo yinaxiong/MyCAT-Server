@@ -57,19 +57,18 @@ import org.opencloudb.mpp.ShardingParseInfo;
 import org.opencloudb.mpp.UpdateParsInf;
 import org.opencloudb.mpp.UpdateSQLAnalyser;
 import org.opencloudb.mysql.nio.handler.FetchStoreNodeOfChildTableHandler;
-import org.opencloudb.parser.ExtNodeToString4SEQ;
 import org.opencloudb.parser.SQLParserDelegate;
 import org.opencloudb.route.function.AbstractPartionAlgorithm;
+import org.opencloudb.server.NonBlockingSession;
 import org.opencloudb.server.parser.ServerParse;
+import org.opencloudb.util.StringUtil;
 
-import com.foundationdb.sql.StandardException;
 import com.foundationdb.sql.parser.CursorNode;
 import com.foundationdb.sql.parser.DDLStatementNode;
 import com.foundationdb.sql.parser.NodeTypes;
 import com.foundationdb.sql.parser.QueryTreeNode;
 import com.foundationdb.sql.parser.ResultSetNode;
 import com.foundationdb.sql.parser.SelectNode;
-import com.foundationdb.sql.unparser.NodeToString;
 
 /**
  * 数据路由服务工具类
@@ -103,8 +102,51 @@ public final class ServerRouterUtil {
 	 */
 	public static RouteResultset route(SystemConfig sysConfig,
 			SchemaConfig schema, int sqlType, String origSQL, String charset,
-			Object info, LayerCachePool cachePool)
+			Object session, LayerCachePool cachePool)
 			throws SQLNonTransientException {
+
+		// 检查是否有全局序列号的，需要异步处理
+		// @micmiu 简单模糊判断SQL是否包含sequence
+
+		if (origSQL.indexOf(" MYCATSEQ_") != -1) {
+			SessionSQLPair pair = new SessionSQLPair(
+					(NonBlockingSession) session, schema, origSQL, sqlType);
+			MycatServer.getInstance().getSequnceProcessor().addNewSql(pair);
+			return null;
+		}
+
+		if (sqlType == ServerParse.INSERT) {
+			String tableName = StringUtil.getTableName(origSQL).toUpperCase();
+			TableConfig tableConfig = schema.getTables().get(tableName);
+			if (null != tableConfig && tableConfig.isAutoIncrement()) {
+				String primaryKey = tableConfig.getPrimaryKey();
+				int firstLeftBracketIndex = origSQL.indexOf("(") + 1;
+				int firstRightBracketIndex = origSQL.indexOf(")");
+				int lastLeftBracketIndex = origSQL.lastIndexOf("(") + 1;
+				String insertFieldsSQL = origSQL.substring(firstLeftBracketIndex, firstRightBracketIndex);
+				
+				if(!insertFieldsSQL.toUpperCase().contains(primaryKey)){
+					int primaryKeyLength=primaryKey.length();
+					int insertSegOffset=firstLeftBracketIndex;
+					StringBuilder newSQLBuilder=new StringBuilder(origSQL).insert(insertSegOffset,primaryKey);
+					
+					insertSegOffset+=primaryKeyLength;
+					newSQLBuilder.insert(insertSegOffset,',');
+					
+					insertSegOffset=lastLeftBracketIndex+primaryKeyLength+1;
+					String mycatSeqPrefix="next value for MYCATSEQ_";
+				    newSQLBuilder.insert(insertSegOffset,mycatSeqPrefix);
+				    
+				    insertSegOffset+=mycatSeqPrefix.length();
+				    newSQLBuilder.insert(insertSegOffset, tableName).insert(insertSegOffset+tableName.length(), ',');
+					
+					SessionSQLPair pair = new SessionSQLPair((NonBlockingSession) session, schema,newSQLBuilder.toString(), sqlType);
+					MycatServer.getInstance().getSequnceProcessor().addNewSql(pair);
+					return null;
+				}
+			}
+		}
+
 		// user handler
 		String stmt = MycatServer.getInstance().getSqlInterceptor()
 				.interceptSQL(origSQL, sqlType);
@@ -130,13 +172,11 @@ public final class ServerRouterUtil {
 			return analyseDoubleAtSgin(schema, rrs, stmt);
 		}
 
-		// 判断是否是元数据SQL，如describe table
-		int ind = stmt.indexOf(' ');
-		String firstToken = stmt.substring(0, ind).toLowerCase();
-		if ("describe".startsWith(firstToken)) {
+		if (sqlType == ServerParse.DESCRIBE) {
+			// 判断是否是元数据SQL，如describe table
+			int ind = stmt.indexOf(' ');
 			return analyseDescrSQL(schema, rrs, stmt, ind + 1);
 		}
-
 		// 生成和展开AST
 		QueryTreeNode ast = SQLParserDelegate.parse(stmt,
 				charset == null ? "utf-8" : charset);
@@ -179,7 +219,7 @@ public final class ServerRouterUtil {
 			}
 
 			// for partition table ,partion column must provided
-			if (tc.getTableType() != TableConfig.TYPE_GLOBAL_TABLE) {
+			else {
 				if (tc.isChildTable()) {
 
 					String joinKeyVal = parsInf.columnPairMap.get(tc
@@ -496,11 +536,11 @@ public final class ServerRouterUtil {
 			return rrs;
 
 		}
-		//show create table tableName
+		// show create table tableName
 		int[] createTabInd = getCreateTablePos(upStmt, 0);
 		if (createTabInd[0] > 0) {
-			int tableNameIndex = createTabInd[0]  + createTabInd[1];
-			if(upStmt.length() > tableNameIndex) {
+			int tableNameIndex = createTabInd[0] + createTabInd[1];
+			if (upStmt.length() > tableNameIndex) {
 				String tableName = stmt.substring(tableNameIndex).trim();
 				int ind2 = tableName.indexOf('.');
 				if (ind2 > 0) {
@@ -510,10 +550,10 @@ public final class ServerRouterUtil {
 				return rrs;
 			}
 		}
-		
+
 		return routeToSingleNode(rrs, schema.getRandomDataNode(), stmt);
 	}
-	
+
 	/**
 	 * 获取语句中前关键字位置和占位个数表名位置
 	 * 
@@ -529,11 +569,11 @@ public final class ServerRouterUtil {
 		String token2 = " TABLE ";
 		int createInd = upStmt.indexOf(token1, start);
 		int tabInd = upStmt.indexOf(token2, start);
-		//既包含CREATE又包含TABLE，且CREATE关键字在TABLE关键字之前
-		if (createInd > 0 && tabInd >0 && tabInd > createInd) {
+		// 既包含CREATE又包含TABLE，且CREATE关键字在TABLE关键字之前
+		if (createInd > 0 && tabInd > 0 && tabInd > createInd) {
 			return new int[] { tabInd, token2.length() };
 		} else {
-			return new int[] { -1, token2.length() };//不满足条件时，只关注第一个返回值为-1，第二个任意
+			return new int[] { -1, token2.length() };// 不满足条件时，只关注第一个返回值为-1，第二个任意
 		}
 	}
 
@@ -672,10 +712,14 @@ public final class ServerRouterUtil {
 					}
 
 				}
+
 				// try by primary key if found in cache
 				Set<ColumnRoutePair> primaryKeyPairs = allColConds.get(tc
 						.getPrimaryKey());
 				if (primaryKeyPairs != null) {
+					if (LOGGER.isInfoEnabled()) {
+						LOGGER.info("try to find cache by primary key ");
+					}
 					cache = false;
 					Set<String> dataNodes = new HashSet<String>(
 							primaryKeyPairs.size());
@@ -1159,4 +1203,52 @@ public final class ServerRouterUtil {
 		return routeNodeSet;
 	}
 
+	public static void main(String[] args) {
+		String origSQL="insert into user(name,code,password)values('name','code','password')";
+		int firstLeftBracketIndex = origSQL.indexOf("(") + 1;
+		int firstRightBracketIndex = origSQL.indexOf(")");
+		int lastLeftBracketIndex = origSQL.lastIndexOf("(") + 1;
+		String insertFieldsSQL = origSQL.substring(firstLeftBracketIndex, firstRightBracketIndex);
+		String tableName = StringUtil.getTableName(origSQL).toUpperCase();
+		String primaryKey="id";
+		String newSQL=null;
+		long s=0;
+		s=System.currentTimeMillis();
+		for(int i=0;i<1000_0000;i++){
+			int primaryKeyLength=primaryKey.length();
+			int insertSegOffset=firstLeftBracketIndex;
+			StringBuilder newSQLBuilder=new StringBuilder(origSQL).insert(insertSegOffset,primaryKey);
+			insertSegOffset+=primaryKeyLength;
+			newSQLBuilder.insert(insertSegOffset,',');
+			insertSegOffset=lastLeftBracketIndex+primaryKeyLength+1;
+			String mycatSeqPrefix="next value for MYCATSEQ_";
+		    newSQLBuilder.insert(insertSegOffset,mycatSeqPrefix);
+		    insertSegOffset+=mycatSeqPrefix.length();
+		    newSQLBuilder.insert(insertSegOffset, tableName).insert(insertSegOffset+tableName.length(), ',');
+			newSQL=newSQLBuilder.toString();
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		System.out.println(newSQL);
+		s=System.currentTimeMillis();
+		for(int i=0;i<1000_0000;i++){
+			newSQL=origSQL.substring(0, firstLeftBracketIndex)+
+				      primaryKey+','+
+				      origSQL.substring(firstLeftBracketIndex,lastLeftBracketIndex)+
+				      "next value for MYCATSEQ_"+tableName+','+
+				      origSQL.substring(lastLeftBracketIndex,origSQL.length());
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		System.out.println(newSQL);
+		s=System.currentTimeMillis();
+		for(int i=0;i<1000_0000;i++){
+			StringBuilder segSQL=new StringBuilder();
+			StringBuilder newSQLBuilder=new StringBuilder(origSQL).insert(firstLeftBracketIndex,segSQL.append(primaryKey).append(','));
+			segSQL.delete(0, segSQL.length());
+			newSQLBuilder.insert(lastLeftBracketIndex+primaryKey.length()+1, segSQL.append("next value for MYCATSEQ_").append(tableName).append(','));
+			newSQL=newSQLBuilder.toString();
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		System.out.println(newSQL);
+		
+	}
 }

@@ -54,9 +54,8 @@ public class MySQLConnection extends BackendAIOConnection {
 	private static final Logger LOGGER = Logger
 			.getLogger(MySQLConnection.class);
 	private static final long CLIENT_FLAGS = initClientFlags();
-	private final AtomicBoolean isRunning = new AtomicBoolean();
 	private volatile long lastTime; // QS_TODO
-	private volatile String schema = "";
+	private volatile String schema = null;
 	private volatile String oldSchema;
 	private volatile boolean borrowed = false;
 	private volatile boolean modifiedSQLExecuted = false;
@@ -130,11 +129,8 @@ public class MySQLConnection extends BackendAIOConnection {
 	private long threadId;
 	private HandshakePacket handshake;
 	private volatile int charsetIndex;
-	private volatile int oldCharsetIndex;
 	private volatile String charset;
-	private volatile String oldCharset;
 	private volatile int txIsolation;
-	private volatile int oldTxIsolation;
 	private volatile boolean autocommit;
 	private volatile boolean oldAutoCommit;
 	private long clientFlags;
@@ -166,8 +162,14 @@ public class MySQLConnection extends BackendAIOConnection {
 	}
 
 	public void setSchema(String newSchema) {
-		this.oldSchema = schema;
-		this.schema = newSchema;
+		String curSchema = schema;
+		if (curSchema == null) {
+			this.schema = newSchema;
+			this.oldSchema = newSchema;
+		} else {
+			this.oldSchema = curSchema;
+			this.schema = newSchema;
+		}
 	}
 
 	public MySQLDataSource getPool() {
@@ -200,7 +202,6 @@ public class MySQLConnection extends BackendAIOConnection {
 
 	public void setCharsetIndex(int charsetIndex) {
 		this.charsetIndex = charsetIndex;
-		this.oldCharsetIndex = charsetIndex;
 	}
 
 	public long getThreadId() {
@@ -217,7 +218,6 @@ public class MySQLConnection extends BackendAIOConnection {
 
 	public void setCharset(String charset) {
 		this.charset = charset;
-		this.oldCharset = charset;
 	}
 
 	public boolean isAuthenticated() {
@@ -246,17 +246,6 @@ public class MySQLConnection extends BackendAIOConnection {
 		}
 		packet.database = schema;
 		packet.write(this);
-	}
-
-	public void setRunning(boolean running) {
-		if (LOGGER.isDebugEnabled()) {
-			LOGGER.debug("set running " + running + " for " + this);
-		}
-		isRunning.set(running);
-	}
-
-	public boolean isRunning() {
-		return isRunning.get();
 	}
 
 	public boolean isAutocommit() {
@@ -389,16 +378,12 @@ public class MySQLConnection extends BackendAIOConnection {
 				return true;
 			}
 			if (charCmd != null) {
-				conn.charsetIndex = conn.oldCharsetIndex;
-				conn.charset = conn.oldCharset;
 				updater = new Runnable() {
 					@Override
 					public void run() {
 						int ci = StatusSync.this.charIndex;
 						conn.charsetIndex = ci;
 						conn.charset = CharsetUtil.getCharset(ci);
-						conn.oldCharsetIndex = ci;
-						conn.oldCharset = CharsetUtil.getCharset(ci);
 					}
 				};
 				cmd = charCmd;
@@ -408,12 +393,10 @@ public class MySQLConnection extends BackendAIOConnection {
 				return true;
 			}
 			if (isoCmd != null) {
-				conn.txIsolation = conn.oldTxIsolation;
 				updater = new Runnable() {
 					@Override
 					public void run() {
 						conn.txIsolation = StatusSync.this.txIsolation;
-						conn.oldTxIsolation = conn.txIsolation;
 					}
 				};
 				cmd = isoCmd;
@@ -447,7 +430,6 @@ public class MySQLConnection extends BackendAIOConnection {
 			executed = true;
 			if (rrn.getStatement() != null) {
 				conn.sendQueryCmd(rrn.getStatement());
-				LOGGER.debug("excute :" + rrn);
 			}
 
 		}
@@ -571,6 +553,7 @@ public class MySQLConnection extends BackendAIOConnection {
 	public void close(String reason) {
 		isQuit.set(true);
 		super.close(reason);
+		pool.connectionClosed(this);
 		if (isClosed.get()) {
 			if (this.respHandler != null) {
 				this.respHandler.connectionClose(this, reason);
@@ -582,12 +565,12 @@ public class MySQLConnection extends BackendAIOConnection {
 
 	public void commit() {
 		_COMMIT.write(this);
-		txSetCmdExecuted=false;
+		txSetCmdExecuted = false;
 	}
 
 	public void rollback() {
 		_ROLLBACK.write(this);
-		txSetCmdExecuted=false;
+		txSetCmdExecuted = false;
 	}
 
 	public void release() {
@@ -596,7 +579,7 @@ public class MySQLConnection extends BackendAIOConnection {
 		modifiedSQLExecuted = false;
 		setResponseHandler(null);
 		pool.releaseChannel(this);
-		txSetCmdExecuted=false;
+		txSetCmdExecuted = false;
 	}
 
 	@Override
@@ -654,23 +637,23 @@ public class MySQLConnection extends BackendAIOConnection {
 	 * 记录sql执行信息
 	 */
 	public void recordSql(String host, String schema, String stmt) {
-		final long now = TimeUtil.currentTimeMillis();
-		if (now > this.lastTime) {
-			// long time = now - this.lastTime;
-			// SQLRecorder sqlRecorder = this.pool.getSqlRecorder();
-			// if (sqlRecorder.check(time)) {
-			// SQLRecord recorder = new SQLRecord();
-			// recorder.host = host;
-			// recorder.schema = schema;
-			// recorder.statement = stmt;
-			// recorder.startTime = lastTime;
-			// recorder.executeTime = time;
-			// recorder.dataNode = pool.getName();
-			// recorder.dataNodeIndex = pool.getIndex();
-			// sqlRecorder.add(recorder);
-			// }
-		}
-		this.lastTime = now;
+		// final long now = TimeUtil.currentTimeMillis();
+		// if (now > this.lastTime) {
+		// // long time = now - this.lastTime;
+		// // SQLRecorder sqlRecorder = this.pool.getSqlRecorder();
+		// // if (sqlRecorder.check(time)) {
+		// // SQLRecord recorder = new SQLRecord();
+		// // recorder.host = host;
+		// // recorder.schema = schema;
+		// // recorder.statement = stmt;
+		// // recorder.startTime = lastTime;
+		// // recorder.executeTime = time;
+		// // recorder.dataNode = pool.getName();
+		// // recorder.dataNodeIndex = pool.getIndex();
+		// // sqlRecorder.add(recorder);
+		// // }
+		// }
+		// this.lastTime = now;
 	}
 
 	private static byte[] passwd(String pass, HandshakePacket hs)
@@ -704,39 +687,14 @@ public class MySQLConnection extends BackendAIOConnection {
 
 	@Override
 	public String toString() {
-		return "MySQLConnection [id="
-				+ id
-				+ ", isRunning="
-				+ isRunning
-				+ ", lastTime="
-				+ lastTime
-				+ ", schema="
-				+ schema
-				+ ", borrowed="
-				+ borrowed
-				+ ", fromSlaveDB="
-				+ fromSlaveDB
-				+ ", threadId="
-				+ threadId
-				+ ", charset="
-				+ charset
-				+ ", txIsolation="
-				+ txIsolation
-				+ ", autocommit="
-				+ autocommit
-				+ ", attachment="
-				+ attachment
-				+ ", respHandler="
-				+ respHandler
-				+ ", host="
-				+ host
-				+ ", port="
-				+ port
-				+ ", statusSync="
-				+ statusSync
-				+ ", writeQueue="
-				+ ((this.getWriteQueue() == null) ? 0 : getWriteQueue()
-						.snapshotSize()) + ", modifiedSQLExecuted="
+		return "MySQLConnection [id=" + id + ", lastTime=" + lastTime
+				+ ", schema=" + schema + ", borrowed=" + borrowed
+				+ ", fromSlaveDB=" + fromSlaveDB + ", threadId=" + threadId
+				+ ", charset=" + charset + ", txIsolation=" + txIsolation
+				+ ", autocommit=" + autocommit + ", attachment=" + attachment
+				+ ", respHandler=" + respHandler + ", host=" + host + ", port="
+				+ port + ", statusSync=" + statusSync + ", writeQueue="
+				+ this.getWriteQueue().size() + ", modifiedSQLExecuted="
 				+ modifiedSQLExecuted + "]";
 	}
 

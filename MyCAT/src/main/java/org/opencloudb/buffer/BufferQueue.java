@@ -24,6 +24,9 @@
 package org.opencloudb.buffer;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.LinkedList;
 
 /**
@@ -31,20 +34,11 @@ import java.util.LinkedList;
  */
 public final class BufferQueue {
 	// private static final Logger LOGGER = Logger.getLogger(BufferQueue.class);
-	private ByteBuffer attachment;
 	private final int total;
 	private final LinkedList<ByteBuffer> items = new LinkedList<ByteBuffer>();
 
 	public BufferQueue(int capacity) {
 		this.total = capacity;
-	}
-
-	public ByteBuffer attachment() {
-		return attachment;
-	}
-
-	public void attach(ByteBuffer buffer) {
-		this.attachment = buffer;
 	}
 
 	/**
@@ -56,8 +50,18 @@ public final class BufferQueue {
 		return this.items.size();
 	}
 
-	public boolean isEmpty() {
-		return items.isEmpty();
+	public Collection<ByteBuffer> removeItems(int count) {
+
+		ArrayList<ByteBuffer> removed = new ArrayList<ByteBuffer>();
+		Iterator<ByteBuffer> itor = items.iterator();
+		while (itor.hasNext()) {
+			removed.add(itor.next());
+			itor.remove();
+			if (removed.size() >= count) {
+				break;
+			}
+		}
+		return removed;
 	}
 
 	/**
@@ -65,9 +69,8 @@ public final class BufferQueue {
 	 * @param buffer
 	 * @throws InterruptedException
 	 */
-	public void put(ByteBuffer buffer) throws InterruptedException {
+	public void put(ByteBuffer buffer) {
 		this.items.offer(buffer);
-
 		if (items.size() > total) {
 			throw new java.lang.RuntimeException(
 					"bufferQueue size exceeded ,maybe sql returned too many records ,cursize:"
@@ -79,6 +82,10 @@ public final class BufferQueue {
 	public ByteBuffer poll() {
 		ByteBuffer buf = items.poll();
 		return buf;
+	}
+
+	public boolean isEmpty() {
+		return items.isEmpty();
 	}
 
 }

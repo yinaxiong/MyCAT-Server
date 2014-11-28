@@ -33,6 +33,7 @@ import java.nio.channels.CompletionHandler;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.log4j.Logger;
+import org.opencloudb.MycatServer;
 import org.opencloudb.net.factory.FrontendConnectionFactory;
 
 /**
@@ -46,8 +47,7 @@ public final class NIOAcceptor implements
 	private final int port;
 	private final AsynchronousServerSocketChannel serverChannel;
 	private final FrontendConnectionFactory factory;
-	private NIOProcessor[] processors;
-	private int nextProcessor;
+
 	private long acceptCount;
 	private final String name;
 
@@ -60,7 +60,7 @@ public final class NIOAcceptor implements
 		serverChannel = AsynchronousServerSocketChannel.open(group);
 		/** 设置TCP属性 */
 		serverChannel.setOption(StandardSocketOptions.SO_REUSEADDR, true);
-		serverChannel.setOption(StandardSocketOptions.SO_RCVBUF, 16 * 1024);
+		serverChannel.setOption(StandardSocketOptions.SO_RCVBUF, 1024 * 16*2);
 		// backlog=100
 		serverChannel.bind(new InetSocketAddress(ip, port), 100);
 	}
@@ -81,16 +81,12 @@ public final class NIOAcceptor implements
 		return acceptCount;
 	}
 
-	public void setProcessors(NIOProcessor[] processors) {
-		this.processors = processors;
-	}
-
 	private void accept(AsynchronousSocketChannel channel, Long id) {
 		try {
 			FrontendConnection c = factory.make(channel);
 			c.setAccepted(true);
 			c.setId(id);
-			NIOProcessor processor = nextProcessor();
+			NIOProcessor processor = MycatServer.getInstance().nextProcessor();
 			c.setProcessor(processor);
 			c.register();
 		} catch (Throwable e) {
@@ -122,15 +118,6 @@ public final class NIOAcceptor implements
 		// next pending waiting
 		pendingAccept();
 
-	}
-
-	private NIOProcessor nextProcessor() {
-		int inx = ++nextProcessor;
-		if (inx >= processors.length) {
-			nextProcessor = 0;
-			inx = 0;
-		}
-		return processors[inx];
 	}
 
 	private static void closeChannel(AsynchronousSocketChannel channel) {

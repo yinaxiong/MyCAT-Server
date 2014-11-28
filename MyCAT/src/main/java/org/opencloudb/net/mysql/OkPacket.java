@@ -89,7 +89,7 @@ public class OkPacket extends MySQLPacket {
 
 	public byte[] writeToBytes(FrontendConnection c) {
 		ByteBuffer buffer = c.allocate();
-		this.write(buffer);
+		this.write(buffer, c);
 		buffer.flip();
 		byte[] data = new byte[buffer.limit()];
 		buffer.get(data);
@@ -97,7 +97,11 @@ public class OkPacket extends MySQLPacket {
 		return data;
 	}
 
-	private void write(ByteBuffer buffer) {
+	private ByteBuffer write(ByteBuffer buffer, FrontendConnection c) {
+
+		int size = calcPacketSize();
+		buffer = c.checkWriteBuffer(buffer, c.getPacketHeaderSize() + size,
+				true);
 		BufferUtil.writeUB3(buffer, calcPacketSize());
 		buffer.put(packetId);
 		buffer.put(fieldCount);
@@ -109,11 +113,12 @@ public class OkPacket extends MySQLPacket {
 			BufferUtil.writeWithLength(buffer, message);
 		}
 
+		return buffer;
+
 	}
 
 	public void write(FrontendConnection c) {
-		ByteBuffer buffer = c.allocate();
-		this.write(buffer);
+		ByteBuffer buffer = write(c.allocate(), c);
 		c.write(buffer);
 	}
 

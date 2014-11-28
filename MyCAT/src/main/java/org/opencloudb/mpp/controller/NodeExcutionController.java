@@ -99,7 +99,6 @@ public class NodeExcutionController {
 	}
 	
 	public void nextExcutePage() {
-		LOGGER.debug("next page. ");
 		Set<String> dataNodeNameSet = nextExcuteMap.keySet();
 		for (Iterator<String> iter = dataNodeNameSet.iterator(); iter.hasNext();) {
 			String dataNodeName = iter.next();
@@ -120,7 +119,6 @@ public class NodeExcutionController {
 		changeNodeSql(node);
 		nodeBackendMap.put(node.getName(), conn);
 		conn.setResponseHandler(this.getNodeRpHandler(node.getName()));
-		conn.setRunning(true);
 		try {
 			conn.execute(node, session.getSource(), autocommit);
 		} catch (IOException e) {
@@ -133,9 +131,8 @@ public class NodeExcutionController {
 		for (Iterator<String> iter = dataNodeNameSet.iterator(); iter.hasNext();) {
 			String dataNodeName = iter.next();
 			BackendConnection backendConn = nodeBackendMap.get(dataNodeName);
-			backendConn.setRunning(false);
 			// realse this connection if safe
-			session.releaseConnectionIfSafe(backendConn, LOGGER.isDebugEnabled());
+			session.releaseConnectionIfSafe(backendConn, LOGGER.isDebugEnabled(),true);
 		}
 	}
 	

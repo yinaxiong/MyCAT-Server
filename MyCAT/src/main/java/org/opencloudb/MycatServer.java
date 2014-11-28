@@ -32,10 +32,13 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.log4j.Logger;
 import org.opencloudb.backend.PhysicalDBPool;
+import org.opencloudb.buffer.BufferPool;
 import org.opencloudb.cache.CacheService;
 import org.opencloudb.config.model.SystemConfig;
 import org.opencloudb.interceptor.SQLInterceptor;
@@ -64,9 +67,11 @@ public class MycatServer {
 	private final CacheService cacheService;
 	private Properties dnIndexProperties;
 	private final AsynchronousChannelGroup[] asyncChannelGroups;
-	private int channelIndex = 0;
+	private volatile int channelIndex = 0;
 	private final MyCATSequnceProcessor sequnceProcessor = new MyCATSequnceProcessor();
 	private final SQLInterceptor sqlInterceptor;
+	private volatile int nextProcessor;
+	private BufferPool bufferPool;
 
 	public static final MycatServer getInstance() {
 		return INSTANCE;
@@ -74,8 +79,6 @@ public class MycatServer {
 
 	private final MycatConfig config;
 	private final Timer timer;
-	private final NameableExecutor aioExecutor;
-	private final NameableExecutor timerExecutor;
 	private final SQLRecorder sqlRecorder;
 	private final AtomicBoolean isOnline;
 	private final long startupTime;
@@ -83,6 +86,7 @@ public class MycatServer {
 	private NIOConnector connector;
 	private NIOAcceptor manager;
 	private NIOAcceptor server;
+	private NameableExecutor businessExecutor;
 
 	public MycatServer() {
 		this.config = new MycatConfig();
@@ -90,31 +94,32 @@ public class MycatServer {
 		int processorCount = system.getProcessors();
 		asyncChannelGroups = new AsynchronousChannelGroup[processorCount];
 		// startup processors
-		int threadpool = system.getProcessorExecutor();
+		int threadPoolSize = system.getProcessorExecutor();
 		try {
-			aioExecutor = ExecutorUtil.create("AIOExecutor", threadpool);
 			processors = new NIOProcessor[processorCount];
 			int processBuferPool = system.getProcessorBufferPool();
 			int processBufferChunk = system.getProcessorBufferChunk();
-
+			int socketBufferLocalPercent = system
+					.getProcessorBufferLocalPercent();
+			bufferPool = new BufferPool(processBuferPool, processBufferChunk,
+					socketBufferLocalPercent / threadPoolSize);
+			businessExecutor = ExecutorUtil.create("BusinessExecutor",
+					threadPoolSize);
 			for (int i = 0; i < processors.length; i++) {
 				asyncChannelGroups[i] = AsynchronousChannelGroup
-						.withThreadPool(aioExecutor);
-				processors[i] = new NIOProcessor("Processor" + i,
-						processBuferPool, processBufferChunk, aioExecutor);
+						.withThreadPool(businessExecutor);
+				processors[i] = new NIOProcessor("Processor" + i, bufferPool,
+						businessExecutor);
 			}
 
 			// startup connector
-			connector = new NIOConnector();
+			connector = new NIOConnector(processors);
 			connector.setWriteQueueCapcity(system.getFrontWriteQueueSize());
-			connector.setProcessors(processors);
 
 		} catch (IOException e) {
 			throw new RuntimeException(e);
 		}
 		this.timer = new Timer(NAME + "Timer", true);
-		this.timerExecutor = ExecutorUtil.create("TimerExecutor",
-				system.getTimerExecutor());
 		this.sqlRecorder = new SQLRecorder(system.getSqlRecordCount());
 		this.isOnline = new AtomicBoolean(true);
 		cacheService = new CacheService();
@@ -128,6 +133,10 @@ public class MycatServer {
 			throw new RuntimeException(e);
 		}
 		this.startupTime = TimeUtil.currentTimeMillis();
+	}
+
+	public BufferPool getBufferPool() {
+		return bufferPool;
 	}
 
 	public MyCATSequnceProcessor getSequnceProcessor() {
@@ -214,7 +223,6 @@ public class MycatServer {
 		mf.setIdleTimeout(system.getIdleTimeout());
 		manager = new NIOAcceptor(NAME + "Manager", system.getBindIp(),
 				system.getManagerPort(), mf, this.asyncChannelGroups[0]);
-		manager.setProcessors(processors);
 		manager.start();
 		LOGGER.info(manager.getName() + " is started and listening on "
 				+ manager.getPort());
@@ -226,7 +234,6 @@ public class MycatServer {
 		sf.setIdleTimeout(system.getIdleTimeout());
 		server = new NIOAcceptor(NAME + "Server", system.getBindIp(),
 				system.getServerPort(), sf, this.asyncChannelGroups[0]);
-		server.setProcessors(processors);
 		server.start();
 		// server started
 		LOGGER.info(server.getName() + " is started and listening on "
@@ -307,8 +314,21 @@ public class MycatServer {
 		return cacheService;
 	}
 
+	public NameableExecutor getBusinessExecutor() {
+		return businessExecutor;
+	}
+
 	public RouteService getRouterservice() {
 		return routerService;
+	}
+
+	public NIOProcessor nextProcessor() {
+		int inx = ++nextProcessor;
+		if (inx >= processors.length) {
+			nextProcessor = 0;
+			inx = 0;
+		}
+		return processors[inx];
 	}
 
 	public NIOProcessor[] getProcessors() {
@@ -317,14 +337,6 @@ public class MycatServer {
 
 	public NIOConnector getConnector() {
 		return connector;
-	}
-
-	public NameableExecutor geAIOExecutor() {
-		return aioExecutor;
-	}
-
-	public NameableExecutor getTimerExecutor() {
-		return timerExecutor;
 	}
 
 	public SQLRecorder getSqlRecorder() {
@@ -362,20 +374,28 @@ public class MycatServer {
 		return new TimerTask() {
 			@Override
 			public void run() {
-				timerExecutor.execute(new Runnable() {
+				businessExecutor.execute(new Runnable() {
 					@Override
 					public void run() {
-						for (NIOProcessor p : processors) {
-							p.checkBackendCons();
+						try {
+							for (NIOProcessor p : processors) {
+								p.checkBackendCons();
+							}
+						} catch (Throwable e) {
+							LOGGER.warn("checkBackendCons caught err:" + e);
 						}
 
 					}
 				});
-				timerExecutor.execute(new Runnable() {
+				nextProcessor().getExecutor().execute(new Runnable() {
 					@Override
 					public void run() {
-						for (NIOProcessor p : processors) {
-							p.checkFrontCons();
+						try {
+							for (NIOProcessor p : processors) {
+								p.checkFrontCons();
+							}
+						} catch (Throwable e) {
+							LOGGER.warn("checkFrontCons caught err:" + e);
 						}
 					}
 				});
@@ -388,7 +408,7 @@ public class MycatServer {
 		return new TimerTask() {
 			@Override
 			public void run() {
-				timerExecutor.execute(new Runnable() {
+				businessExecutor.execute(new Runnable() {
 					@Override
 					public void run() {
 						Map<String, PhysicalDBPool> nodes = config
@@ -414,7 +434,7 @@ public class MycatServer {
 		return new TimerTask() {
 			@Override
 			public void run() {
-				timerExecutor.execute(new Runnable() {
+				businessExecutor.execute(new Runnable() {
 					@Override
 					public void run() {
 						Map<String, PhysicalDBPool> nodes = config

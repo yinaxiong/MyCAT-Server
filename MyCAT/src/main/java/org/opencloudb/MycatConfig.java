@@ -23,6 +23,11 @@
  */
 package org.opencloudb;
 
+import java.io.IOException;
+import java.net.StandardSocketOptions;
+import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.NetworkChannel;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -65,7 +70,12 @@ public class MycatConfig {
 		this.users = confInit.getUsers();
 		this.schemas = confInit.getSchemas();
 		this.dataHosts = confInit.getDataHosts();
+		
 		this.dataNodes = confInit.getDataNodes();
+		for(PhysicalDBPool dbPool:dataHosts.values())
+		{
+			dbPool.setSchemas(getDataNodeSchemasOfDataHost(dbPool.getHostName()));
+		}  
 		this.quarantine = confInit.getQuarantine();
 		this.cluster = confInit.getCluster();
 
@@ -77,6 +87,27 @@ public class MycatConfig {
 
 	public SystemConfig getSystem() {
 		return system;
+	}
+
+	public void setSocketParams(NetworkChannel channel,
+			boolean isFrontChannel) throws IOException {
+		int sorcvbuf = 0;
+		int sosndbuf = 0;
+		int soNoDelay=0;
+		if (isFrontChannel) {
+			sorcvbuf = system.getFrontsocketsorcvbuf();
+			sosndbuf = system.getFrontsocketsosndbuf();
+			soNoDelay=system.getFrontSocketNoDelay();
+		} else {
+			sorcvbuf = system.getBacksocketsorcvbuf();
+			sosndbuf = system.getBacksocketsosndbuf();
+			soNoDelay=system.getBackSocketNoDelay();
+		}
+
+		channel.setOption(StandardSocketOptions.SO_RCVBUF, sorcvbuf);
+		channel.setOption(StandardSocketOptions.SO_SNDBUF, sosndbuf);
+		channel.setOption(StandardSocketOptions.TCP_NODELAY, soNoDelay==1);
+
 	}
 
 	public Map<String, UserConfig> getUsers() {
@@ -97,6 +128,19 @@ public class MycatConfig {
 
 	public Map<String, PhysicalDBNode> getDataNodes() {
 		return dataNodes;
+	}
+	
+	public String[] getDataNodeSchemasOfDataHost(String dataHost)
+	{
+		ArrayList<String> schemas=new ArrayList<String>(30);
+		for(PhysicalDBNode dn:dataNodes.values())
+		{
+			 if(dn.getDbPool().getHostName().equals(dataHost))
+			 {
+				 schemas.add(dn.getDatabase());
+			 }
+		}
+		return schemas.toArray(new String[schemas.size()]);
 	}
 
 	public Map<String, PhysicalDBNode> getBackupDataNodes() {

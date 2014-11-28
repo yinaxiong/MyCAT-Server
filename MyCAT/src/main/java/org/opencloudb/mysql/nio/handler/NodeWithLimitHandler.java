@@ -109,7 +109,6 @@ public class NodeWithLimitHandler implements ResponseHandler, Terminatable {
 
 	@Override
 	public void connectionAcquired(final BackendConnection conn) {
-		conn.setRunning(true);
 		session.bindConnection(node, conn);
 		session.getSource().getProcessor().getExecutor()
 				.execute(new Runnable() {
@@ -122,9 +121,8 @@ public class NodeWithLimitHandler implements ResponseHandler, Terminatable {
 
 	private void _execute(BackendConnection conn) {
 		if (session.closed()) {
-			conn.setRunning(false);
 			endRunning();
-			session.clearResources();
+			session.clearResources(false);
 			return;
 		}
 		conn.setResponseHandler(this);
@@ -150,7 +148,6 @@ public class NodeWithLimitHandler implements ResponseHandler, Terminatable {
 
 	@Override
 	public void connectionError(Throwable e, BackendConnection conn) {
-		conn.setRunning(false);
 		endRunning();
 		ErrorPacket err = new ErrorPacket();
 		err.packetId = ++packetId;
@@ -171,11 +168,10 @@ public class NodeWithLimitHandler implements ResponseHandler, Terminatable {
 	}
 
 	private void backConnectionErr(ErrorPacket errPkg, BackendConnection conn) {
-		conn.setRunning(false);
 		endRunning();
 		String errmgs=  " errno:" + errPkg.errno +" "+new String(errPkg.message) ;
 		LOGGER.warn("execute  sql err :"+errmgs+ " con:" + conn);
-		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled());
+		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled(),false);
 		ServerConnection source = session.getSource();
 		source.setTxInterrupt(errmgs);
 		errPkg.write(source);
@@ -186,8 +182,7 @@ public class NodeWithLimitHandler implements ResponseHandler, Terminatable {
 	public void okResponse(byte[] data, BackendConnection conn) {
 		boolean executeResponse = conn.syncAndExcute();
 		if (executeResponse) {
-			conn.setRunning(false);
-			session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled());
+			session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled(),false);
 			endRunning();
 			ServerConnection source = session.getSource();
 			OkPacket ok = new OkPacket();

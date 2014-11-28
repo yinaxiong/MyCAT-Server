@@ -184,7 +184,6 @@ public class JDBCConnection implements BackendConnection {
 		pool.releaseChannel(this);
 	}
 
-	@Override
 	public void setRunning(boolean running) {
 		this.running = running;
 
@@ -224,10 +223,12 @@ public class JDBCConnection implements BackendConnection {
 
 		} catch (SQLException e) {
 			e.printStackTrace();
+			
+			String msg = e.getMessage();
 			ErrorPacket error = new ErrorPacket();
 			error.packetId = ++packetId;
-			error.errno = ErrorCode.ERR_NOT_SUPPORTED;
-			error.message = "not supporeted yet".getBytes();
+			error.errno = e.getErrorCode();
+			error.message = msg.getBytes();
 			this.respHandler.errorResponse(error.writeToBytes(sc), this);
 		} finally {
 			this.running = false;
@@ -387,7 +388,7 @@ public class JDBCConnection implements BackendConnection {
 	
 
 	
-	@Override
+
 	public boolean isRunning() {
 		return this.running;
 	}

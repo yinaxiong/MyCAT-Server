@@ -37,6 +37,7 @@ import org.opencloudb.config.ErrorCode;
 import org.opencloudb.config.model.QuarantineConfig;
 import org.opencloudb.config.model.SchemaConfig;
 import org.opencloudb.config.model.UserConfig;
+import org.opencloudb.config.util.DnPropertyUtil;
 import org.opencloudb.manager.ManagerConnection;
 import org.opencloudb.net.mysql.OkPacket;
 
@@ -84,7 +85,17 @@ public final class ReloadConfig {
 		Map<String, PhysicalDBPool> cNodes = conf.getDataHosts();
 		boolean reloadStatus = true;
 		for (PhysicalDBPool dn : dataHosts.values()) {
-			dn.init(0);
+			
+			// init datahost
+			String index = DnPropertyUtil.loadDnIndexProps().getProperty(dn.getHostName(),
+					"0");
+			if (!"0".equals(index)) {
+				LOGGER.info("init datahost: " + dn.getHostName()
+						+ "  to use datasource index:" + index);
+			}
+			dn.init(Integer.valueOf(index));
+			
+			//dn.init(0);
 			if (!dn.isInitSuccess()) {
 				reloadStatus = false;
 				break;

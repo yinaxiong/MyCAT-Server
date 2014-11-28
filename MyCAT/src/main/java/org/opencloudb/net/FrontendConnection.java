@@ -368,18 +368,7 @@ public abstract class FrontendConnection extends AbstractConnection {
 			return;
 
 		}
-		// 异步处理前端数据
-		// processor.getHandler().execute(new Runnable()
-		processor.getExecutor().execute(new Runnable() {
-			@Override
-			public void run() {
-				try {
-					handler.handle(data);
-				} catch (Throwable t) {
-					error(ErrorCode.ERR_HANDLE_DATA, t);
-				}
-			}
-		});
+		handler.handle(data);
 	}
 
 	protected int getServerCapabilities() {

@@ -59,6 +59,11 @@ public class ConnectionMeta {
 	public boolean isAutocommit() {
 		return autocommit;
 	}
+	
+	public boolean isSameSchema(BackendConnection theCon)
+	{
+		return theCon.getSchema().equals(schema);
+	}
 
 	/**
 	 * get metadata similarity
@@ -81,6 +86,13 @@ public class ConnectionMeta {
 			result++;
 		}
 		return result;
+	}
+
+	@Override
+	public String toString() {
+		return "ConnectionMeta [schema=" + schema + ", charset=" + charset
+				+ ", txIsolation=" + txIsolation + ", autocommit=" + autocommit
+				+ "]";
 	}
 
 }

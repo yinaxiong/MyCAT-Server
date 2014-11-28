@@ -24,7 +24,6 @@
 package org.opencloudb.mysql.nio.handler;
 
 import java.util.List;
-import java.util.concurrent.Executor;
 
 import org.apache.log4j.Logger;
 import org.opencloudb.backend.BackendConnection;
@@ -51,6 +50,10 @@ public class CommitNodeHandler extends MultiNodeHandler {
 
 	private void commit(OkPacket packet) {
 		final int initCount = session.getTargetCount();
+		if(LOGGER.isDebugEnabled())
+		{
+			LOGGER.debug("commit session sql ,total connections "+initCount);
+		}
 		lock.lock();
 		try {
 			reset(initCount);
@@ -64,30 +67,20 @@ public class CommitNodeHandler extends MultiNodeHandler {
 		}
 
 		// 执行
-		Executor executor = session.getSource().getProcessor().getExecutor();
 		int started = 0;
 		for (RouteResultsetNode rrn : session.getTargetKeys()) {
 			if (rrn == null) {
-				try {
 					LOGGER.error("null is contained in RoutResultsetNodes, source = "
 							+ session.getSource());
-				} catch (Exception e) {
-				}
 				continue;
 			}
 			final BackendConnection conn = session.getTarget(rrn);
 			if (conn != null) {
-				conn.setRunning(true);
-				executor.execute(new Runnable() {
-					@Override
-					public void run() {
-						if (clearIfSessionClosed(session)) {
-							return;
-						}
-						conn.setResponseHandler(CommitNodeHandler.this);
-						conn.commit();
-					}
-				});
+				if (clearIfSessionClosed(session)) {
+					return;
+				}
+				conn.setResponseHandler(CommitNodeHandler.this);
+				conn.commit();
 				++started;
 			}
 		}
@@ -97,21 +90,25 @@ public class CommitNodeHandler extends MultiNodeHandler {
 			 * assumption: only caused by front-end connection close. <br/>
 			 * Otherwise, packet must be returned to front-end
 			 */
-			session.clearResources();
+			session.clearResources(true);
 		}
 	}
 
 	@Override
 	public void connectionAcquired(BackendConnection conn) {
 		LOGGER.error("unexpected invocation: connectionAcquired from commit");
-		
+
 	}
 
 	@Override
 	public void okResponse(byte[] ok, BackendConnection conn) {
-		conn.setRunning(false);
+		if (clearIfSessionClosed(session)) {
+			return;
+		} else if (canClose(conn, false)) {
+			return;
+		}
 		if (decrementCountBy(1)) {
-			session.clearResources();
+			session.clearResources(false);
 			if (this.isFail() || session.closed()) {
 				tryErrorFinished(conn, true);
 			} else {

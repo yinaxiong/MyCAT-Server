@@ -591,7 +591,7 @@ public class ServerRouteUtilTest extends TestCase {
 		final SchemaConfig schema = schemaMap.get("cndb");
 
 		String sql = "desc offer";
-		RouteResultset rrs = ServerRouterUtil.route(new SystemConfig(),schema, 1, sql, null, null,
+		RouteResultset rrs = ServerRouterUtil.route(new SystemConfig(),schema, ServerParse.DESCRIBE, sql, null, null,
 				cachePool);
 		Assert.assertEquals(false, rrs.isCacheAble());
 		Assert.assertEquals(-1L, rrs.getLimitSize());
@@ -601,7 +601,7 @@ public class ServerRouteUtilTest extends TestCase {
 		Assert.assertEquals("desc offer", rrs.getNodes()[0].getStatement());
 
 		sql = "desc cndb.offer";
-		rrs = ServerRouterUtil.route(new SystemConfig(),schema, 1, sql, null, null, cachePool);
+		rrs = ServerRouterUtil.route(new SystemConfig(),schema, ServerParse.DESCRIBE, sql, null, null, cachePool);
 		Assert.assertEquals(false, rrs.isCacheAble());
 		Assert.assertEquals(-1L, rrs.getLimitSize());
 		Assert.assertEquals(1, rrs.getNodes().length);
@@ -610,7 +610,7 @@ public class ServerRouteUtilTest extends TestCase {
 		Assert.assertEquals("desc offer", rrs.getNodes()[0].getStatement());
 
 		sql = "desc cndb.offer col1";
-		rrs = ServerRouterUtil.route(new SystemConfig(),schema, 1, sql, null, null, cachePool);
+		rrs = ServerRouterUtil.route(new SystemConfig(),schema, ServerParse.DESCRIBE, sql, null, null, cachePool);
 		Assert.assertEquals(false, rrs.isCacheAble());
 		Assert.assertEquals(-1L, rrs.getLimitSize());
 		Assert.assertEquals(1, rrs.getNodes().length);

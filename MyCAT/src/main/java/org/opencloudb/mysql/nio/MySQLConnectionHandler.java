@@ -77,7 +77,7 @@ public class MySQLConnectionHandler extends BackendAsyncHandler {
 
 	@Override
 	public void handle(byte[] data) {
-		offerData(data, source.getProcessor().getExecutor());
+		offerData(data);
 	}
 
 	@Override
@@ -148,12 +148,14 @@ public class MySQLConnectionHandler extends BackendAsyncHandler {
 
 	@Override
 	protected void handleDataError(Throwable t) {
-		logger.warn("handleDataError err,maybe BUG,please reprot :", t);
+		logger.warn("handleDataError err,maybe BUG,please reprot ,con:"
+				+ source, t);
 		dataQueue.clear();
 		String errMsg = "execption:(handleDataError) " + t.toString();
 		this.source.close(errMsg);
-		if (responseHandler != null) {
-			responseHandler.connectionClose(source, errMsg);
+		ResponseHandler respHand = responseHandler;
+		if (respHand != null) {
+			respHand.connectionClose(source, errMsg);
 		}
 
 	}
@@ -162,8 +164,9 @@ public class MySQLConnectionHandler extends BackendAsyncHandler {
 	 * OK数据包处理
 	 */
 	private void handleOkPacket(byte[] data) {
-		if (responseHandler != null) {
-			responseHandler.okResponse(data, source);
+		ResponseHandler respHand = responseHandler;
+		if (respHand != null) {
+			respHand.okResponse(data, source);
 		}
 	}
 
@@ -171,8 +174,11 @@ public class MySQLConnectionHandler extends BackendAsyncHandler {
 	 * ERROR数据包处理
 	 */
 	private void handleErrorPacket(byte[] data) {
-		if (responseHandler != null) {
-			responseHandler.errorResponse(data, source);
+		ResponseHandler respHand = responseHandler;
+		if (respHand != null) {
+			respHand.errorResponse(data, source);
+		} else {
+			closeNoHandler();
 		}
 	}
 
@@ -180,11 +186,11 @@ public class MySQLConnectionHandler extends BackendAsyncHandler {
 	 * 字段数据包结束处理
 	 */
 	private void handleFieldEofPacket(byte[] data) {
-		if (responseHandler != null) {
-			responseHandler.fieldEofResponse(header, fields, data, source);
+		ResponseHandler respHand = responseHandler;
+		if (respHand != null) {
+			respHand.fieldEofResponse(header, fields, data, source);
 		} else {
-			logger.warn("no handler bind in this con " + this + " client:"
-					+ source);
+			closeNoHandler();
 		}
 	}
 
@@ -192,9 +198,18 @@ public class MySQLConnectionHandler extends BackendAsyncHandler {
 	 * 行数据包处理
 	 */
 	private void handleRowPacket(byte[] data) {
-		if (responseHandler != null) {
-			responseHandler.rowResponse(data, source);
+		ResponseHandler respHand = responseHandler;
+		if (respHand != null) {
+			respHand.rowResponse(data, source);
 		} else {
+			closeNoHandler();
+
+		}
+	}
+
+	private void closeNoHandler() {
+		if (!source.isClosedOrQuit()) {
+			source.close("no handler");
 			logger.warn("no handler bind in this con " + this + " client:"
 					+ source);
 		}
@@ -207,8 +222,7 @@ public class MySQLConnectionHandler extends BackendAsyncHandler {
 		if (responseHandler != null) {
 			responseHandler.rowEofResponse(data, source);
 		} else {
-			logger.warn("no handler bind in this con " + this + " client:"
-					+ source);
+			closeNoHandler();
 		}
 	}
 

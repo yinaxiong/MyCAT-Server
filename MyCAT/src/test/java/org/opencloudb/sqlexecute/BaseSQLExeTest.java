@@ -39,7 +39,9 @@ import junit.framework.Assert;
  */
 public class BaseSQLExeTest {
 
-	private static Connection getCon(String url, String user, String passwd)
+	private static boolean driverLoaded = false;
+
+	public static Connection getCon(String url, String user, String passwd)
 			throws SQLException {
 		Connection theCon = DriverManager.getConnection(url, user, passwd);
 		return theCon;
@@ -161,7 +163,7 @@ public class BaseSQLExeTest {
 		System.out.println("testTransaction passed");
 	}
 
-	private static void closeCon(Connection theCon) {
+	public static void closeCon(Connection theCon) {
 		try {
 			theCon.close();
 		} catch (SQLException e) {
@@ -169,25 +171,28 @@ public class BaseSQLExeTest {
 		}
 	}
 
-	public static void main(String[] args) {
-		try {
+	public static Connection getCon(String[] args) throws Exception {
+		if (driverLoaded == false) {
 			Class.forName("com.mysql.jdbc.Driver");
-		} catch (ClassNotFoundException e1) {
-			e1.printStackTrace();
+			driverLoaded = true;
+
 		}
 		if (args.length < 3) {
 			System.out
 					.println("input param,format: [jdbcurl] [user] [password]   ");
-			return;
+			return null;
 		}
 		String url = args[0];
 		String user = args[1];
 		String password = args[2];
-		Connection theCon = null;
+		return getCon(url, user, password);
 
-		theCon = null;
+	}
+
+	public static void main(String[] args) throws Exception {
+		Connection theCon = null;
 		try {
-			theCon = getCon(url, user, password);
+			theCon = getCon(args);
 			testBadSQL(theCon);
 		} catch (SQLException e) {
 			e.printStackTrace();
@@ -196,7 +201,7 @@ public class BaseSQLExeTest {
 		}
 
 		try {
-			theCon = getCon(url, user, password);
+			theCon = getCon(args);
 			testMultiNodeLargeResultset(theCon);
 		} catch (SQLException e) {
 			e.printStackTrace();
@@ -204,7 +209,7 @@ public class BaseSQLExeTest {
 			closeCon(theCon);
 		}
 		try {
-			theCon = getCon(url, user, password);
+			theCon = getCon(args);
 			testSingleNodeNormalSQL(theCon);
 		} catch (SQLException e) {
 			e.printStackTrace();
@@ -212,7 +217,7 @@ public class BaseSQLExeTest {
 			closeCon(theCon);
 		}
 		try {
-			theCon = getCon(url, user, password);
+			theCon = getCon(args);
 			testTransaction(theCon);
 		} catch (SQLException e) {
 			e.printStackTrace();
@@ -221,7 +226,7 @@ public class BaseSQLExeTest {
 		}
 		theCon = null;
 		try {
-			theCon = getCon(url, user, password);
+			theCon = getCon(args);
 			testMultiNodeNormalSQL(theCon);
 		} catch (SQLException e) {
 			e.printStackTrace();

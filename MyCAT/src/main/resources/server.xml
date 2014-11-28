@@ -10,9 +10,16 @@
 <!DOCTYPE mycat:server SYSTEM "server.dtd">
 <mycat:server xmlns:mycat="http://org.opencloudb/">
 	<system>
-
-		<property name="sequnceHandlerType">0</property>
-		
+	<!-- 
+	<property name="processors">1</property> 
+	<property name="processorExecutor">32</property> 
+	 -->
+		<!--默认是65535 64K 用于sql解析时最大文本长度 -->
+		<!--<property name="maxStringLiteralLength">65535</property>-->
+		<!--<property name="sequnceHandlerType">0</property>-->
+		<!--<property name="backSocketNoDelay">1</property>-->
+		<!--<property name="frontSocketNoDelay">1</property>-->
+		<!--<property name="processorExecutor">16</property>-->
 		<!-- 
 			<property name="mutiNodeLimitType">1</property> 0：开启小数量级（默认） ；1：开启亿级数据排序
 	    	<property name="mutiNodePatchSize">100</property> 亿级数量排序批量

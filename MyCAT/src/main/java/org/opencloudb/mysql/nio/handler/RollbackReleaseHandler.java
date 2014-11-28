@@ -32,53 +32,55 @@ import org.opencloudb.backend.BackendConnection;
  * @author mycat
  */
 public class RollbackReleaseHandler implements ResponseHandler {
-    private static final Logger logger = Logger.getLogger(RollbackReleaseHandler.class);
+	private static final Logger logger = Logger
+			.getLogger(RollbackReleaseHandler.class);
 
-    public RollbackReleaseHandler() {
-    }
+	public RollbackReleaseHandler() {
+	}
 
-    @Override
-    public void connectionAcquired(BackendConnection conn) {
-        logger.error("unexpected invocation: connectionAcquired from rollback-release");
-    }
+	@Override
+	public void connectionAcquired(BackendConnection conn) {
+		logger.error("unexpected invocation: connectionAcquired from rollback-release");
+	}
 
-    @Override
-    public void connectionError(Throwable e, BackendConnection conn) {
-     
-    }
+	@Override
+	public void connectionError(Throwable e, BackendConnection conn) {
 
-    @Override
-    public void errorResponse(byte[] err, BackendConnection conn) {
-        conn.quit();
-    }
+	}
 
-    @Override
-    public void okResponse(byte[] ok, BackendConnection conn) {
-        conn.release();
-    }
+	@Override
+	public void errorResponse(byte[] err, BackendConnection conn) {
+		conn.quit();
+	}
 
-    @Override
-    public void fieldEofResponse(byte[] header, List<byte[]> fields, byte[] eof, BackendConnection conn) {
-    }
+	@Override
+	public void okResponse(byte[] ok, BackendConnection conn) {
+		logger.info("client error ocurred ,rollbacked backend conn "+conn);
+		conn.release();
+	}
 
-    @Override
-    public void rowResponse(byte[] row, BackendConnection conn) {
-    }
+	@Override
+	public void fieldEofResponse(byte[] header, List<byte[]> fields,
+			byte[] eof, BackendConnection conn) {
+	}
 
-    @Override
-    public void rowEofResponse(byte[] eof, BackendConnection conn) {
-     
-    }
+	@Override
+	public void rowResponse(byte[] row, BackendConnection conn) {
+	}
+
+	@Override
+	public void rowEofResponse(byte[] eof, BackendConnection conn) {
+
+	}
 
 	@Override
 	public void writeQueueAvailable() {
-		
+
 	}
 
 	@Override
 	public void connectionClose(BackendConnection conn, String reason) {
-		
-		
-	}
 
 	}
+
+}

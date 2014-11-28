@@ -47,13 +47,18 @@ public class MySQLDataSource extends PhysicalDatasource {
 	}
 
 	@Override
-	public void createNewConnection(ResponseHandler handler) throws IOException {
-		factory.make(this, handler);
+	public void createNewConnection(ResponseHandler handler,String schema) throws IOException {
+		factory.make(this, handler,schema);
 	}
 
 	@Override
 	public DBHeartbeat createHeartBeat() {
 		return new MySQLHeartbeat(this);
+	}
+
+	public void connectionClosed(MySQLConnection mySQLConnection) {
+		// TODO Auto-generated method stub
+		
 	}
 
 }

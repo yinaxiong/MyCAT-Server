@@ -36,6 +36,7 @@ import org.opencloudb.backend.PhysicalDBNode;
 import org.opencloudb.config.ErrorCode;
 import org.opencloudb.net.mysql.ErrorPacket;
 import org.opencloudb.net.mysql.OkPacket;
+import org.opencloudb.route.RouteResultset;
 import org.opencloudb.route.RouteResultsetNode;
 import org.opencloudb.server.NonBlockingSession;
 import org.opencloudb.server.ServerConnection;
@@ -48,6 +49,7 @@ public class SingleNodeHandler implements ResponseHandler, Terminatable {
 	private static final Logger LOGGER = Logger
 			.getLogger(SingleNodeHandler.class);
 	private final RouteResultsetNode node;
+	private final RouteResultset rrs;
 	private final NonBlockingSession session;
 	// only one thread access at one time no need lock
 	private volatile byte packetId;
@@ -55,16 +57,16 @@ public class SingleNodeHandler implements ResponseHandler, Terminatable {
 	private volatile boolean isRunning;
 	private Runnable terminateCallBack;
 
-	public SingleNodeHandler(RouteResultsetNode route,
-			NonBlockingSession session) {
-		if (route == null) {
+	public SingleNodeHandler(RouteResultset rrs, NonBlockingSession session) {
+		this.rrs = rrs;
+		this.node = rrs.getNodes()[0];
+		if (node == null) {
 			throw new IllegalArgumentException("routeNode is null!");
 		}
 		if (session == null) {
 			throw new IllegalArgumentException("session is null!");
 		}
 		this.session = session;
-		this.node = route;
 	}
 
 	@Override
@@ -110,12 +112,9 @@ public class SingleNodeHandler implements ResponseHandler, Terminatable {
 		this.isRunning = true;
 		this.packetId = 0;
 		final BackendConnection conn = session.getTarget(node);
-		if (!session.tryExistsCon(conn, node, new Runnable() {
-			@Override
-			public void run() {
-				_execute(conn);
-			}
-		})) {
+		if (session.tryExistsCon(conn, node)) {
+			_execute(conn);
+		} else {
 			// create new connection
 
 			MycatConfig conf = MycatServer.getInstance().getConfig();
@@ -129,22 +128,15 @@ public class SingleNodeHandler implements ResponseHandler, Terminatable {
 
 	@Override
 	public void connectionAcquired(final BackendConnection conn) {
-		conn.setRunning(true);
 		session.bindConnection(node, conn);
-		session.getSource().getProcessor().getExecutor()
-				.execute(new Runnable() {
-					@Override
-					public void run() {
-						_execute(conn);
-					}
-				});
+		_execute(conn);
+
 	}
 
 	private void _execute(BackendConnection conn) {
 		if (session.closed()) {
-			conn.setRunning(false);
 			endRunning();
-			session.clearResources();
+			session.clearResources(true);
 			return;
 		}
 		conn.setResponseHandler(this);
@@ -170,7 +162,6 @@ public class SingleNodeHandler implements ResponseHandler, Terminatable {
 
 	@Override
 	public void connectionError(Throwable e, BackendConnection conn) {
-		conn.setRunning(false);
 		endRunning();
 		ErrorPacket err = new ErrorPacket();
 		err.packetId = ++packetId;
@@ -191,11 +182,11 @@ public class SingleNodeHandler implements ResponseHandler, Terminatable {
 	}
 
 	private void backConnectionErr(ErrorPacket errPkg, BackendConnection conn) {
-		conn.setRunning(false);
 		endRunning();
-		String errmgs=  " errno:" + errPkg.errno +" "+new String(errPkg.message) ;
-		LOGGER.warn("execute  sql err :"+errmgs+ " con:" + conn);
-		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled());
+		String errmgs = " errno:" + errPkg.errno + " "
+				+ new String(errPkg.message);
+		LOGGER.warn("execute  sql err :" + errmgs + " con:" + conn);
+		session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled(), false);
 		ServerConnection source = session.getSource();
 		source.setTxInterrupt(errmgs);
 		errPkg.write(source);
@@ -206,8 +197,8 @@ public class SingleNodeHandler implements ResponseHandler, Terminatable {
 	public void okResponse(byte[] data, BackendConnection conn) {
 		boolean executeResponse = conn.syncAndExcute();
 		if (executeResponse) {
-			conn.setRunning(false);
-			session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled());
+			session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled(),
+					false);
 			endRunning();
 			ServerConnection source = session.getSource();
 			OkPacket ok = new OkPacket();
@@ -223,16 +214,16 @@ public class SingleNodeHandler implements ResponseHandler, Terminatable {
 	@Override
 	public void rowEofResponse(byte[] eof, BackendConnection conn) {
 		ServerConnection source = session.getSource();
-		conn.setRunning(false);
 		conn.recordSql(source.getHost(), source.getSchema(),
 				node.getStatement());
-		
-		//判断是调用存储过程的话不能在这里释放链接
-		if ( !source.isHasOkRsp().get() )
-		{
-			session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled());
+
+		// 判断是调用存储过程的话不能在这里释放链接
+		if (!rrs.isCallStatement()) {
+			session.releaseConnectionIfSafe(conn, LOGGER.isDebugEnabled(),
+					false);
 			endRunning();
 		}
+
 		eof[3] = ++packetId;
 		buffer = source.writeToBuffer(eof, allocBuffer());
 		source.write(buffer);

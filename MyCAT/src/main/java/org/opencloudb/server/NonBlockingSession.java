@@ -64,13 +64,11 @@ import org.opencloudb.util.ObjectUtil;
  * @author mycat
  */
 public class NonBlockingSession implements Session {
-	private static final Logger LOGGER = Logger
+	public static final Logger LOGGER = Logger
 			.getLogger(NonBlockingSession.class);
 
 	private final ServerConnection source;
 	private final ConcurrentHashMap<RouteResultsetNode, BackendConnection> target;
-	private final AtomicBoolean terminating;
-
 	// life-cycle: each sql execution
 	private volatile SingleNodeHandler singleNodeHandler;
 	private volatile MultiNodeQueryHandler multiNodeHandler;
@@ -81,7 +79,6 @@ public class NonBlockingSession implements Session {
 		this.source = source;
 		this.target = new ConcurrentHashMap<RouteResultsetNode, BackendConnection>(
 				2, 1);
-		this.terminating = new AtomicBoolean(false);
 	}
 
 	@Override
@@ -102,10 +99,10 @@ public class NonBlockingSession implements Session {
 		return target.get(key);
 	}
 
-	public Map<RouteResultsetNode, BackendConnection> getTargetMap()
-	{
+	public Map<RouteResultsetNode, BackendConnection> getTargetMap() {
 		return this.target;
 	}
+
 	public BackendConnection removeTarget(RouteResultsetNode key) {
 		return target.remove(key);
 	}
@@ -130,7 +127,7 @@ public class NonBlockingSession implements Session {
 		}
 
 		if (nodes.length == 1) {
-			singleNodeHandler = new SingleNodeHandler(nodes[0], this);
+			singleNodeHandler = new SingleNodeHandler(rrs, this);
 			try {
 				singleNodeHandler.execute();
 			} catch (Exception e) {
@@ -139,23 +136,25 @@ public class NonBlockingSession implements Session {
 			}
 		} else {
 			boolean autocommit = source.isAutocommit();
-			SystemConfig sysConfig = MycatServer.getInstance().getConfig().getSystem();
+			SystemConfig sysConfig = MycatServer.getInstance().getConfig()
+					.getSystem();
 			int mutiNodeLimitType = sysConfig.getMutiNodeLimitType();
 			if (SystemConfig.MUTINODELIMIT_LAR_DATA == mutiNodeLimitType) {
-				RouteResultset rrsCopy = (RouteResultset) ObjectUtil.copyObject(rrs);
+				RouteResultset rrsCopy = (RouteResultset) ObjectUtil
+						.copyObject(rrs);
 				MutiDataMergeService dataMergeSvr = null;
 				if (ServerParse.SELECT == type && rrsCopy.needMerge()) {
 					dataMergeSvr = new MutiDataMergeService(rrsCopy);
 				}
-				multiNodeHandler = new MultiNodeQueryWithLimitHandler(rrsCopy, autocommit, this,
-						dataMergeSvr);
+				multiNodeHandler = new MultiNodeQueryWithLimitHandler(rrsCopy,
+						autocommit, this, dataMergeSvr);
 			} else {
 				DataMergeService dataMergeSvr = null;
 				if (ServerParse.SELECT == type && rrs.needMerge()) {
 					dataMergeSvr = new DataMergeService(rrs);
 				}
-				multiNodeHandler = new MultiNodeQueryHandler(rrs, autocommit, this,
-						dataMergeSvr);
+				multiNodeHandler = new MultiNodeQueryHandler(rrs, autocommit,
+						this, dataMergeSvr);
 			}
 			try {
 				multiNodeHandler.execute();
@@ -202,44 +201,28 @@ public class NonBlockingSession implements Session {
 	 * {@link ServerConnection#isClosed()} must be true before invoking this
 	 */
 	public void terminate() {
-		if (!terminating.compareAndSet(false, true)) {
-			return;
+		for (RouteResultsetNode node : target.keySet()) {
+			BackendConnection c = target.get(node);
+			c.close("client closed ");
 		}
-		kill(new Runnable() {
-			@Override
-			public void run() {
-				new Terminator().nextInvocation(singleNodeHandler)
-						.nextInvocation(multiNodeHandler)
-						.nextInvocation(commitHandler)
-						.nextInvocation(rollbackHandler)
-						.nextInvocation(new Terminatable() {
-							@Override
-							public void terminate(Runnable runnable) {
-								clearConnections(false);
-							}
-						}).nextInvocation(new Terminatable() {
-							@Override
-							public void terminate(Runnable runnable) {
-								terminating.set(false);
-							}
-						}).invoke();
-			}
-		});
+		clearHandlesResources();
 	}
 
-	public void releaseConnectionIfSafe(BackendConnection conn, boolean debug) {
+	public void releaseConnectionIfSafe(BackendConnection conn, boolean debug,
+			boolean needRollback) {
 		RouteResultsetNode node = (RouteResultsetNode) conn.getAttachment();
 
 		if (node != null) {
 			if (this.source.isAutocommit() || conn.isFromSlaveDB()
 					|| !conn.isModifiedSQLExecuted()) {
 				releaseConnection((RouteResultsetNode) conn.getAttachment(),
-						LOGGER.isDebugEnabled());
+						LOGGER.isDebugEnabled(), needRollback);
 			}
 		}
 	}
 
-	public void releaseConnection(RouteResultsetNode rrn, boolean debug) {
+	public void releaseConnection(RouteResultsetNode rrn, boolean debug,
+			final boolean needRollback) {
 
 		BackendConnection c = target.remove(rrn);
 		if (c != null) {
@@ -249,24 +232,23 @@ public class NonBlockingSession implements Session {
 			if (c.getAttachment() != null) {
 				c.setAttachment(null);
 			}
-			if (c.isRunning()) {
-				LOGGER.warn("close running connection is found " + c);
-				c.close("abnomal");
-			} else if (!c.isClosedOrQuit()) {
+			if (!c.isClosedOrQuit()) {
 				if (c.isAutocommit()) {
 					c.release();
-				} else {
+				} else if (needRollback) {
 					c.setResponseHandler(new RollbackReleaseHandler());
 					c.rollback();
+				} else {
+					c.release();
 				}
 			}
 		}
 	}
 
-	public void releaseConnections() {
+	public void releaseConnections(final boolean needRollback) {
 		boolean debug = LOGGER.isDebugEnabled();
 		for (RouteResultsetNode rrn : target.keySet()) {
-			releaseConnection(rrn, debug);
+			releaseConnection(rrn, debug, needRollback);
 		}
 	}
 
@@ -280,39 +262,8 @@ public class NonBlockingSession implements Session {
 		return target.put(key, conn);
 	}
 
-	private static class Terminator {
-		private LinkedList<Terminatable> list = new LinkedList<Terminatable>();
-		private Iterator<Terminatable> iter;
-
-		public Terminator nextInvocation(Terminatable term) {
-			list.add(term);
-			return this;
-		}
-
-		public void invoke() {
-			iter = list.iterator();
-			terminate();
-		}
-
-		private void terminate() {
-			if (iter.hasNext()) {
-				Terminatable term = iter.next();
-				if (term != null) {
-					term.terminate(new Runnable() {
-						@Override
-						public void run() {
-							terminate();
-						}
-					});
-				} else {
-					terminate();
-				}
-			}
-		}
-	}
-
 	public boolean tryExistsCon(final BackendConnection conn,
-			RouteResultsetNode node, Runnable runable) {
+			RouteResultsetNode node) {
 
 		if (conn == null) {
 			return false;
@@ -324,7 +275,6 @@ public class NonBlockingSession implements Session {
 						+ " for " + node);
 			}
 			conn.setAttachment(node);
-			getSource().getProcessor().getExecutor().execute(runable);
 			return true;
 		} else {
 			// slavedb connection and can't use anymore ,release it
@@ -332,18 +282,18 @@ public class NonBlockingSession implements Session {
 				LOGGER.debug("release slave connection,can't be used in trasaction  "
 						+ conn + " for " + node);
 			}
-			releaseConnection(node, LOGGER.isDebugEnabled());
+			releaseConnection(node, LOGGER.isDebugEnabled(), false);
 		}
 		return false;
 	}
 
-	private void kill(Runnable run) {
+	private void kill() {
 		boolean hooked = false;
 		AtomicInteger count = null;
 		Map<RouteResultsetNode, BackendConnection> killees = null;
 		for (RouteResultsetNode node : target.keySet()) {
 			BackendConnection c = target.get(node);
-			if (c != null && c.isRunning()) {
+			if (c != null) {
 				if (!hooked) {
 					hooked = true;
 					killees = new HashMap<RouteResultsetNode, BackendConnection>();
@@ -358,7 +308,7 @@ public class NonBlockingSession implements Session {
 			for (Entry<RouteResultsetNode, BackendConnection> en : killees
 					.entrySet()) {
 				KillConnectionHandler kill = new KillConnectionHandler(
-						en.getValue(), this, run, count);
+						en.getValue(), this);
 				MycatConfig conf = MycatServer.getInstance().getConfig();
 				PhysicalDBNode dn = conf.getDataNodes().get(
 						en.getKey().getName());
@@ -372,52 +322,27 @@ public class NonBlockingSession implements Session {
 					kill.connectionError(e, null);
 				}
 			}
-		} else {
-			run.run();
-		}
-	}
-
-	private void clearConnections(boolean pessimisticRelease) {
-		for (RouteResultsetNode node : target.keySet()) {
-			BackendConnection c = target.remove(node);
-
-			if (c == null || c.isClosedOrQuit()) {
-				continue;
-			}
-
-			// 如果通道正在运行中，则关闭当前通道。
-			if (c.isRunning() || (pessimisticRelease && source.isClosed())) {
-				c.close("source closed");
-				continue;
-			}
-
-			// 非事务中的通道，直接释放资源。
-			if (c.isAutocommit()) {
-				c.release();
-				continue;
-			}
-
-			c.setResponseHandler(new RollbackReleaseHandler());
-			c.rollback();
 		}
 	}
 
 	private void clearHandlesResources() {
-		if (this.singleNodeHandler != null) {
-			singleNodeHandler.clearResources();
+		SingleNodeHandler singleHander = singleNodeHandler;
+		if (singleHander != null) {
+			singleHander.clearResources();
 			singleNodeHandler = null;
 		}
-		if (this.multiNodeHandler != null) {
-			multiNodeHandler.clearResources();
+		MultiNodeQueryHandler multiHandler = multiNodeHandler;
+		if (multiHandler != null) {
+			multiHandler.clearResources();
 			multiNodeHandler = null;
 		}
 	}
 
-	public void clearResources() {
+	public void clearResources(final boolean needRollback) {
 		if (LOGGER.isDebugEnabled()) {
 			LOGGER.debug("clear session resources " + this);
 		}
-		this.releaseConnections();
+		this.releaseConnections(needRollback);
 		clearHandlesResources();
 	}
 

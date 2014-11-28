@@ -36,18 +36,19 @@ import org.opencloudb.net.factory.BackendConnectionFactory;
  * @author mycat
  */
 public class MySQLConnectionFactory extends BackendConnectionFactory {
-	public MySQLConnection make(MySQLDataSource pool, ResponseHandler handler)
+	public MySQLConnection make(MySQLDataSource pool, ResponseHandler handler,String schema)
 			throws IOException {
 
 		DBHostConfig dsc = pool.getConfig();
 		AsynchronousSocketChannel channel = openSocketChannel();
+		MycatServer.getInstance().getConfig().setSocketParams(channel, false);
 		MySQLConnection c = new MySQLConnection(channel, pool.isReadNode());
 
 		c.setHost(dsc.getIp());
 		c.setPort(dsc.getPort());
 		c.setUser(dsc.getUser());
 		c.setPassword(dsc.getPassword());
-		// c.setSchema(dsc.getDatabase());
+		c.setSchema(schema);
 		c.setHandler(new MySQLConnectionAuthenticator(c, handler));
 		c.setPool(pool);
 		c.setIdleTimeout(pool.getConfig().getIdleTimeout());

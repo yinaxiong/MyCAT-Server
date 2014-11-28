@@ -34,7 +34,6 @@ public class PhysicalDBNode {
 	protected final String name;
 	protected final String database;
 	protected final PhysicalDBPool dbPool;
-	protected volatile long executeCount;
 
 	public PhysicalDBNode(String hostName, String database,
 			PhysicalDBPool dbPool) {
@@ -45,10 +44,6 @@ public class PhysicalDBNode {
 
 	public String getName() {
 		return name;
-	}
-
-	public long getExecuteCount() {
-		return executeCount;
 	}
 
 	public PhysicalDBPool getDbPool() {
@@ -68,7 +63,7 @@ public class PhysicalDBNode {
 	public void getConnectionFromSameSource(ConnectionMeta conMeta,
 			BackendConnection exitsCon, ResponseHandler handler,
 			Object attachment) throws Exception {
-		
+
 		PhysicalDatasource ds = this.dbPool.findDatasouce(exitsCon);
 		if (ds == null) {
 			throw new RuntimeException(
@@ -103,7 +98,6 @@ public class PhysicalDBNode {
 				dbPool.getSource().getConnection(conMeta, handler, attachment);
 			}
 
-			executeCount++;
 		} else {
 			throw new IllegalArgumentException("Invalid DataSource:"
 					+ dbPool.getActivedIndex());
