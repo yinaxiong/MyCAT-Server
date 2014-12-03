@@ -26,24 +26,29 @@ package org.opencloudb.mysql.nio;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.CompletionHandler;
+import java.nio.channels.NetworkChannel;
 
 import org.opencloudb.MycatServer;
 import org.opencloudb.config.model.DBHostConfig;
 import org.opencloudb.mysql.nio.handler.ResponseHandler;
+import org.opencloudb.net.NIOConnector;
 import org.opencloudb.net.factory.BackendConnectionFactory;
 
 /**
  * @author mycat
  */
 public class MySQLConnectionFactory extends BackendConnectionFactory {
-	public MySQLConnection make(MySQLDataSource pool, ResponseHandler handler,String schema)
-			throws IOException {
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	public MySQLConnection make(MySQLDataSource pool, ResponseHandler handler,
+			String schema) throws IOException {
 
 		DBHostConfig dsc = pool.getConfig();
-		AsynchronousSocketChannel channel = openSocketChannel();
-		MycatServer.getInstance().getConfig().setSocketParams(channel, false);
-		MySQLConnection c = new MySQLConnection(channel, pool.isReadNode());
+		NetworkChannel channel = openSocketChannel(MycatServer.getInstance()
+				.isAIO());
 
+		MySQLConnection c = new MySQLConnection(channel, pool.isReadNode());
+		MycatServer.getInstance().getConfig().setSocketParams(c, false);
 		c.setHost(dsc.getIp());
 		c.setPort(dsc.getPort());
 		c.setUser(dsc.getUser());
@@ -52,8 +57,16 @@ public class MySQLConnectionFactory extends BackendConnectionFactory {
 		c.setHandler(new MySQLConnectionAuthenticator(c, handler));
 		c.setPool(pool);
 		c.setIdleTimeout(pool.getConfig().getIdleTimeout());
-		channel.connect(new InetSocketAddress(dsc.getIp(), dsc.getPort()), c,
-				MycatServer.getInstance().getConnector());
+		if (channel instanceof AsynchronousSocketChannel) {
+			((AsynchronousSocketChannel) channel).connect(
+					new InetSocketAddress(dsc.getIp(), dsc.getPort()), c,
+					(CompletionHandler) MycatServer.getInstance()
+							.getConnector());
+		} else {
+			((NIOConnector) MycatServer.getInstance().getConnector())
+					.postConnect(c);
+
+		}
 		return c;
 	}
 

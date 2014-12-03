@@ -23,7 +23,8 @@
  */
 package org.opencloudb.net.handler;
 
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.opencloudb.net.NIOHandler;
@@ -33,14 +34,13 @@ import org.opencloudb.net.NIOHandler;
  */
 public abstract class BackendAsyncHandler implements NIOHandler {
 
-	protected final LinkedBlockingQueue<byte[]> dataQueue = new LinkedBlockingQueue<byte[]>();
+	protected final ConcurrentLinkedQueue<byte[]> dataQueue = new ConcurrentLinkedQueue<byte[]>();
 	protected final AtomicBoolean isHandling = new AtomicBoolean(false);
 
-	protected void offerData(byte[] data) {
-		//only one thread handle data and data read finshed ,then start other read/write event (asyn Read/Write) 
+	protected void offerData(byte[] data, Executor executor) {
 		handleData(data);
 //		if (dataQueue.offer(data)) {
-//			handleQueue();
+//			handleQueue(executor);
 //		} else {
 //			offerDataError();
 //		}
@@ -52,23 +52,28 @@ public abstract class BackendAsyncHandler implements NIOHandler {
 
 	protected abstract void handleDataError(Throwable t);
 
-	protected void handleQueue() {
+	protected void handleQueue(final Executor executor) {
 		if (isHandling.compareAndSet(false, true)) {
-			try {
-				byte[] data = null;
-				while ((data = dataQueue.poll()) != null) {
-					handleData(data);
+			// asynchronize execute
+			executor.execute(new Runnable() {
+				@Override
+				public void run() {
+					try {
+						byte[] data = null;
+						while ((data = dataQueue.poll()) != null) {
+							handleData(data);
+						}
+					} catch (Throwable t) {
+						handleDataError(t);
+					} finally {
+						isHandling.set(false);
+						if (!dataQueue.isEmpty()) {
+							handleQueue(executor);
+						}
+					}
 				}
-			} catch (Throwable t) {
-				handleDataError(t);
-			} finally {
-				isHandling.set(false);
-				if (!dataQueue.isEmpty()) {
-					handleQueue();
-				}
-			}
+			});
+
 		}
-
 	}
-
 }

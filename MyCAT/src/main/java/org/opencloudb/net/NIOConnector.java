@@ -23,105 +23,126 @@
  */
 package org.opencloudb.net;
 
-import java.nio.channels.CompletionHandler;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.SocketChannel;
+import java.util.Set;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import org.apache.log4j.Logger;
-import org.opencloudb.buffer.BufferQueue;
+import org.opencloudb.MycatServer;
 import org.opencloudb.config.ErrorCode;
 
 /**
  * @author mycat
  */
-public final class NIOConnector implements
-		CompletionHandler<Void, BackendAIOConnection> {
+public final class NIOConnector extends Thread implements SocketConnector {
 	private static final Logger LOGGER = Logger.getLogger(NIOConnector.class);
 	private static final ConnectIdGenerator ID_GENERATOR = new ConnectIdGenerator();
-	protected int packetHeaderSize = 4;
-	protected int maxPacketSize = 16 * 1024 * 1024;
-	protected int writeQueueCapcity = 8;
-	protected long idleTimeout = 8 * 3600 * 1000L;
-	private final NIOProcessor[] processors;
-	private int nextProcessor;
+
+	private final String name;
+	private final Selector selector;
+	private final BlockingQueue<AbstractConnection> connectQueue;
 	private long connectCount;
+	private final NIOReactorPool reactorPool;
 
-	public NIOConnector(NIOProcessor[] processors) {
-		this.processors = processors;
-	}
-
-	@Override
-	public void completed(Void result, BackendAIOConnection attachment) {
-		finishConnect(attachment);
-	}
-
-	public int getPacketHeaderSize() {
-		return packetHeaderSize;
-	}
-
-	public void setPacketHeaderSize(int packetHeaderSize) {
-		this.packetHeaderSize = packetHeaderSize;
-	}
-
-	public int getMaxPacketSize() {
-		return maxPacketSize;
-	}
-
-	public void setMaxPacketSize(int maxPacketSize) {
-		this.maxPacketSize = maxPacketSize;
-	}
-
-	public int getWriteQueueCapcity() {
-		return writeQueueCapcity;
-	}
-
-	public void setWriteQueueCapcity(int writeQueueCapcity) {
-		this.writeQueueCapcity = writeQueueCapcity;
-	}
-
-	public long getIdleTimeout() {
-		return idleTimeout;
-	}
-
-	public void setIdleTimeout(long idleTimeout) {
-		this.idleTimeout = idleTimeout;
-	}
-
-	@Override
-	public void failed(Throwable exc, BackendAIOConnection conn) {
-		conn.onConnectFailed(exc);
-	}
-
-	private void postConnect(BackendAIOConnection c) {
-		c.setPacketHeaderSize(packetHeaderSize);
-		c.setMaxPacketSize(maxPacketSize);
-		c.setIdleTimeout(idleTimeout);
+	public NIOConnector(String name, NIOReactorPool reactorPool)
+			throws IOException {
+		super.setName(name);
+		this.name = name;
+		this.selector = Selector.open();
+		this.reactorPool = reactorPool;
+		this.connectQueue = new LinkedBlockingQueue<AbstractConnection>();
 	}
 
 	public long getConnectCount() {
 		return connectCount;
 	}
 
-	private void finishConnect(BackendAIOConnection c) {
-		postConnect(c);
+	public void postConnect(AbstractConnection c) {
+		connectQueue.offer(c);
+		selector.wakeup();
+	}
+
+	@Override
+	public void run() {
+		final Selector selector = this.selector;
+		for (;;) {
+			++connectCount;
+			try {
+				selector.select(1000L);
+				connect(selector);
+				Set<SelectionKey> keys = selector.selectedKeys();
+				try {
+					for (SelectionKey key : keys) {
+						Object att = key.attachment();
+						if (att != null && key.isValid() && key.isConnectable()) {
+							finishConnect(key, att);
+						} else {
+							key.cancel();
+						}
+					}
+				} finally {
+					keys.clear();
+				}
+			} catch (Throwable e) {
+				LOGGER.warn(name, e);
+			}
+		}
+	}
+
+	private void connect(Selector selector) {
+		AbstractConnection c = null;
+		while ((c = connectQueue.poll()) != null) {
+			try {
+				SocketChannel channel = (SocketChannel) c.getChannel();
+				channel.register(selector, SelectionKey.OP_CONNECT, c);
+				channel.connect(new InetSocketAddress(c.host, c.port));
+			} catch (Throwable e) {
+				c.error(ErrorCode.ERR_CONNECT_SOCKET, e);
+			}
+		}
+	}
+
+	private void finishConnect(SelectionKey key, Object att) {
+		AbstractConnection c = (AbstractConnection) att;
 		try {
-			if (c.finishConnect()) {
+			if (finishConnect(c, (SocketChannel) c.channel)) {
+				clearSelectionKey(key);
 				c.setId(ID_GENERATOR.getId());
-				NIOProcessor processor = nextProcessor();
+				NIOProcessor processor = MycatServer.getInstance()
+						.nextProcessor();
 				c.setProcessor(processor);
-				c.register();
+				NIOReactor reactor = reactorPool.getNextReactor();
+				reactor.postRegister(c);
+
 			}
 		} catch (Throwable e) {
-			LOGGER.info("connect err " + e);
+			clearSelectionKey(key);
 			c.error(ErrorCode.ERR_CONNECT_SOCKET, e);
 		}
 	}
 
-	private NIOProcessor nextProcessor() {
-		int inx = ++nextProcessor;
-		if (inx >= processors.length) {
-			nextProcessor = 0;
-			inx = 0;
+	private boolean finishConnect(AbstractConnection c, SocketChannel channel)
+			throws IOException {
+		if (channel.isConnectionPending()) {
+			channel.finishConnect();
+
+			c.setLocalPort(channel.socket().getLocalPort());
+			return true;
+		} else {
+			return false;
 		}
-		return processors[inx];
+	}
+
+	private void clearSelectionKey(SelectionKey key) {
+		if (key.isValid()) {
+			key.attach(null);
+			key.cancel();
+		}
 	}
 
 	/**

@@ -167,13 +167,13 @@ public class JDBCConnection implements BackendConnection {
 
 	@Override
 	public void quit() {
-    this.close("client quit");
-    
+		this.close("client quit");
+
 	}
 
 	@Override
 	public void setLastTime(long currentTimeMillis) {
-		this.lastTime=currentTimeMillis;
+		this.lastTime = currentTimeMillis;
 
 	}
 
@@ -214,8 +214,8 @@ public class JDBCConnection implements BackendConnection {
 				this.oldSchema = schema;
 			}
 			con.setAutoCommit(autocommit);
-			int sqlType=rrn.getSqlType();
-			if (sqlType==ServerParse.SELECT||sqlType==ServerParse.SHOW) {
+			int sqlType = rrn.getSqlType();
+			if (sqlType == ServerParse.SELECT || sqlType == ServerParse.SHOW) {
 				ouputResultSet(sc, orgin);
 			} else {
 				executeddl(sc, sql);
@@ -223,7 +223,7 @@ public class JDBCConnection implements BackendConnection {
 
 		} catch (SQLException e) {
 			e.printStackTrace();
-			
+
 			String msg = e.getMessage();
 			ErrorPacket error = new ErrorPacket();
 			error.packetId = ++packetId;
@@ -385,10 +385,6 @@ public class JDBCConnection implements BackendConnection {
 		}
 	}
 
-	
-
-	
-
 	public boolean isRunning() {
 		return this.running;
 	}
@@ -444,8 +440,4 @@ public class JDBCConnection implements BackendConnection {
 				+ ", port=" + port + "]";
 	}
 
-	@Override
-	public boolean isFake(){
-		return false;
-	}
 }

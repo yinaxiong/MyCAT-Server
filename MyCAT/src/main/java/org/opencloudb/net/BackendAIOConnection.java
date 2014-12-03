@@ -25,10 +25,9 @@ package org.opencloudb.net;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.NetworkChannel;
 
 import org.opencloudb.backend.BackendConnection;
-import org.opencloudb.util.TimeUtil;
 
 /**
  * @author mycat
@@ -36,65 +35,31 @@ import org.opencloudb.util.TimeUtil;
 public abstract class BackendAIOConnection extends AbstractConnection implements
 		BackendConnection {
 
-	protected long id;
-	protected String host;
-	protected int port;
-	protected int localPort;
-	protected long idleTimeout;
+	
+	
 	protected boolean isFinishConnect;
 
-	public BackendAIOConnection(AsynchronousSocketChannel channel) {
+	public BackendAIOConnection(NetworkChannel channel) {
 		super(channel);
 	}
 
-	public void register() {
+	public void register() throws IOException {
 		this.asynRead();
 	}
 
-	public long getId() {
-		return id;
-	}
-
-	public void setId(long id) {
-		this.id = id;
-	}
-
-	public String getHost() {
-		return host;
-	}
 
 	public void setHost(String host) {
 		this.host = host;
 	}
 
-	public int getPort() {
-		return port;
-	}
 
 	public void setPort(int port) {
 		this.port = port;
 	}
 
-	public int getLocalPort() {
-		return localPort;
-	}
+	
 
-	public void setLocalPort(int localPort) {
-		this.localPort = localPort;
-	}
-
-	public long getIdleTimeout() {
-		return idleTimeout;
-	}
-
-	public void setIdleTimeout(long idleTimeout) {
-		this.idleTimeout = idleTimeout;
-	}
-
-	public boolean isIdleTimeout() {
-		return TimeUtil.currentTimeMillis() > Math.max(lastWriteTime,
-				lastReadTime) + idleTimeout;
-	}
+	
 
 	public abstract void onConnectFailed(Throwable e);
 
@@ -115,8 +80,5 @@ public abstract class BackendAIOConnection extends AbstractConnection implements
 				+ port + ", localPort=" + localPort + "]";
 	}
 
-	@Override
-	public boolean isFake(){
-		return false;
-	}
+	
 }

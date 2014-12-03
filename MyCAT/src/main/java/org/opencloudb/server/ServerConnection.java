@@ -24,7 +24,7 @@
 package org.opencloudb.server;
 
 import java.io.IOException;
-import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.NetworkChannel;
 import java.sql.SQLNonTransientException;
 
 import org.apache.log4j.Logger;
@@ -52,7 +52,7 @@ public class ServerConnection extends FrontendConnection {
 	private long lastInsertId;
 	private NonBlockingSession session;
 
-	public ServerConnection(AsynchronousSocketChannel channel)
+	public ServerConnection(NetworkChannel channel)
 			throws IOException {
 		super(channel);
 		this.txInterrupted = false;

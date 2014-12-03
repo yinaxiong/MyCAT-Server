@@ -18,10 +18,14 @@ public class ConQueue {
 
 		}
 		BackendConnection con = f1.poll();
-		if (con == null) {
+		if (con == null || con.isClosedOrQuit()) {
 			con = f2.poll();
 		}
-		return con;
+		if (con == null || con.isClosedOrQuit()) {
+			return null;
+		} else {
+			return con;
+		}
 
 	}
 
@@ -31,6 +35,12 @@ public class ConQueue {
 
 	public void incExecuteCount() {
 		this.executeCount++;
+	}
+
+	public void removeCon(BackendConnection con) {
+		if (!autoCommitCons.remove(con)) {
+			manCommitCons.remove(con);
+		}
 	}
 
 	public boolean isSameCon(BackendConnection con) {

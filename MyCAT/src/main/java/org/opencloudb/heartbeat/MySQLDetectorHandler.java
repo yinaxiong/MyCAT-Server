@@ -48,7 +48,7 @@ public class MySQLDetectorHandler extends BackendAsyncHandler {
 
     @Override
     public void handle(byte[] data) {
-        offerData(data);
+        offerData(data,source.getProcessor().getExecutor());
     }
 
     @Override

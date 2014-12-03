@@ -33,6 +33,8 @@ import org.apache.log4j.Logger;
  * @author mycat
  */
 public final class BufferPool {
+	// this value not changed ,isLocalCacheThread use it
+	public static final String LOCAL_BUF_THREAD_PREX = "$_";
 	private static final ThreadLocalBufferPool localBufferPool = new ThreadLocalBufferPool(
 			4000);
 	private static final Logger LOGGER = Logger.getLogger(BufferPool.class);
@@ -42,8 +44,9 @@ public final class BufferPool {
 	private volatile int newCreated;
 	private final int threadLocalCount;
 	private final int capactiy;
-	private long  totalBytes = 0;
-	private long  totalCounts = 0;
+	private long totalBytes = 0;
+	private long totalCounts = 0;
+
 	public BufferPool(int bufferSize, int chunkSize, int threadLocalPercent) {
 		this.chunkSize = chunkSize;
 		int size = bufferSize / chunkSize;
@@ -53,6 +56,13 @@ public final class BufferPool {
 		for (int i = 0; i < capactiy; i++) {
 			items.offer(createDirectBuffer(chunkSize));
 		}
+	}
+
+	private static final boolean isLocalCacheThread() {
+		final String thname = Thread.currentThread().getName();
+		return (thname.length() < LOCAL_BUF_THREAD_PREX.length()) ? false
+				: (thname.charAt(0) == '$' && thname.charAt(1) == '_');
+
 	}
 
 	public long getSharedOptsCount() {
@@ -68,10 +78,13 @@ public final class BufferPool {
 	}
 
 	public ByteBuffer allocate() {
-		// allocate from threadlocal
-		ByteBuffer node = localBufferPool.get().poll();
-		if (node != null) {
-			return node;
+		ByteBuffer node = null;
+		if (isLocalCacheThread()) {
+			// allocate from threadlocal
+			node = localBufferPool.get().poll();
+			if (node != null) {
+				return node;
+			}
 		}
 		node = items.poll();
 		if (node == null) {
@@ -91,7 +104,7 @@ public final class BufferPool {
 			return false;
 		}
 		totalCounts++;
-		totalBytes+=buffer.limit();
+		totalBytes += buffer.limit();
 		buffer.clear();
 		return true;
 	}
@@ -100,27 +113,29 @@ public final class BufferPool {
 		if (!checkValidBuffer(buffer)) {
 			return;
 		}
-
-		BufferQueue localQueue = localBufferPool.get();
-		if (localQueue.snapshotSize() < threadLocalCount) {
-			localQueue.put(buffer);
+		if (isLocalCacheThread()) {
+			BufferQueue localQueue = localBufferPool.get();
+			if (localQueue.snapshotSize() < threadLocalCount) {
+				localQueue.put(buffer);
+			} else {
+				// recyle 3/4 thread local buffer
+				items.addAll(localQueue.removeItems(threadLocalCount * 3 / 4));
+				items.offer(buffer);
+				sharedOptsCount++;
+			}
 		} else {
-			// recyle 2/3 thread local buffer
-			items.addAll(localQueue.removeItems(threadLocalCount * 3 / 4));
-			items.offer(buffer);
 			sharedOptsCount++;
+			items.offer(buffer);
 		}
 
 	}
 
 	public int getAvgBufSize() {
-		if(this.totalBytes<0)
-		{
-			totalBytes=0;
-			this.totalCounts=0;
+		if (this.totalBytes < 0) {
+			totalBytes = 0;
+			this.totalCounts = 0;
 			return 0;
-		}else
-		{
+		} else {
 			return (int) (totalBytes / totalCounts);
 		}
 	}

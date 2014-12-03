@@ -37,8 +37,9 @@ public final class SystemConfig {
 	public static final String SYS_HOME = "MYCAT_HOME";
 	private static final int DEFAULT_PORT = 8066;
 	private static final int DEFAULT_MANAGER_PORT = 9066;
-	private static final String DEFAULT_CHARSET = "UTF-8";
+	private static final String DEFAULT_CHARSET = "utf8";
 
+	private static final String DEFAULT_SQL_PARSER = "fdbparser";// druidparser
 	private static final int DEFAULT_BUFFER_CHUNK_SIZE = 4096;
 	private int processorBufferLocalPercent;
 	private static final int DEFAULT_PROCESSORS = Runtime.getRuntime()
@@ -103,6 +104,19 @@ public final class SystemConfig {
 	public static final int MUTINODELIMIT_PATCH_SIZE = 100;
 	private int mutiNodePatchSize = MUTINODELIMIT_PATCH_SIZE;
 
+	private String defaultSqlParser = DEFAULT_SQL_PARSER;
+	private int usingAIO = 0;
+	private int packetHeaderSize = 4;
+	private int maxPacketSize = 16 * 1024 * 1024;
+
+	public String getDefaultSqlParser() {
+		return defaultSqlParser;
+	}
+
+	public void setDefaultSqlParser(String defaultSqlParser) {
+		this.defaultSqlParser = defaultSqlParser;
+	}
+
 	public SystemConfig() {
 		this.serverPort = DEFAULT_PORT;
 		this.managerPort = DEFAULT_MANAGER_PORT;
@@ -113,8 +127,7 @@ public final class SystemConfig {
 		this.processorExecutor = (DEFAULT_PROCESSORS != 1) ? DEFAULT_PROCESSORS * 2
 				: 4;
 		this.managerExecutor = 2;
-		processorBufferPool = DEFAULT_BUFFER_CHUNK_SIZE * processorExecutor
-				* 1000;
+		processorBufferPool = DEFAULT_BUFFER_CHUNK_SIZE * processors * 1000;
 		this.processorBufferLocalPercent = 100;
 		this.timerExecutor = DEFAULT_PROCESSORS;
 		this.idleTimeout = DEFAULT_IDLE_TIMEOUT;
@@ -146,6 +159,22 @@ public final class SystemConfig {
 
 	public void setSequnceHandlerType(int sequnceHandlerType) {
 		this.sequnceHandlerType = sequnceHandlerType;
+	}
+
+	public int getPacketHeaderSize() {
+		return packetHeaderSize;
+	}
+
+	public void setPacketHeaderSize(int packetHeaderSize) {
+		this.packetHeaderSize = packetHeaderSize;
+	}
+
+	public int getMaxPacketSize() {
+		return maxPacketSize;
+	}
+
+	public void setMaxPacketSize(int maxPacketSize) {
+		this.maxPacketSize = maxPacketSize;
 	}
 
 	public int getFrontWriteQueueSize() {
@@ -423,6 +452,46 @@ public final class SystemConfig {
 		this.backSocketNoDelay = backSocketNoDelay;
 	}
 
+	public int getMaxStringLiteralLength() {
+		return maxStringLiteralLength;
+	}
+
+	public void setMaxStringLiteralLength(int maxStringLiteralLength) {
+		this.maxStringLiteralLength = maxStringLiteralLength;
+	}
+
+	public int getMutiNodeLimitType() {
+		return mutiNodeLimitType;
+	}
+
+	public void setMutiNodeLimitType(int mutiNodeLimitType) {
+		this.mutiNodeLimitType = mutiNodeLimitType;
+	}
+
+	public int getMutiNodePatchSize() {
+		return mutiNodePatchSize;
+	}
+
+	public void setMutiNodePatchSize(int mutiNodePatchSize) {
+		this.mutiNodePatchSize = mutiNodePatchSize;
+	}
+
+	public int getProcessorBufferLocalPercent() {
+		return processorBufferLocalPercent;
+	}
+
+	public void setProcessorBufferLocalPercent(int processorBufferLocalPercent) {
+		this.processorBufferLocalPercent = processorBufferLocalPercent;
+	}
+
+	public int getUsingAIO() {
+		return usingAIO;
+	}
+
+	public void setUsingAIO(int usingAIO) {
+		this.usingAIO = usingAIO;
+	}
+
 	@Override
 	public String toString() {
 		return "SystemConfig [processorBufferLocalPercent="
@@ -457,39 +526,9 @@ public final class SystemConfig {
 				+ ", sequnceHandlerType=" + sequnceHandlerType
 				+ ", sqlInterceptor=" + sqlInterceptor + ", mutiNodeLimitType="
 				+ mutiNodeLimitType + ", mutiNodePatchSize="
-				+ mutiNodePatchSize + "]";
-	}
-
-	public int getMaxStringLiteralLength() {
-		return maxStringLiteralLength;
-	}
-
-	public void setMaxStringLiteralLength(int maxStringLiteralLength) {
-		this.maxStringLiteralLength = maxStringLiteralLength;
-	}
-
-	public int getMutiNodeLimitType() {
-		return mutiNodeLimitType;
-	}
-
-	public void setMutiNodeLimitType(int mutiNodeLimitType) {
-		this.mutiNodeLimitType = mutiNodeLimitType;
-	}
-
-	public int getMutiNodePatchSize() {
-		return mutiNodePatchSize;
-	}
-
-	public void setMutiNodePatchSize(int mutiNodePatchSize) {
-		this.mutiNodePatchSize = mutiNodePatchSize;
-	}
-
-	public int getProcessorBufferLocalPercent() {
-		return processorBufferLocalPercent;
-	}
-
-	public void setProcessorBufferLocalPercent(int processorBufferLocalPercent) {
-		this.processorBufferLocalPercent = processorBufferLocalPercent;
+				+ mutiNodePatchSize + ", defaultSqlParser=" + defaultSqlParser
+				+ ", usingAIO=" + usingAIO + ", packetHeaderSize="
+				+ packetHeaderSize + ", maxPacketSize=" + maxPacketSize + "]";
 	}
 
 }

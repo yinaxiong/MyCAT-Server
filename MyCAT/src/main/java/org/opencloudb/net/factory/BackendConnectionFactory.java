@@ -24,8 +24,10 @@
 package org.opencloudb.net.factory;
 
 import java.io.IOException;
-import java.net.StandardSocketOptions;
+import java.net.Socket;
 import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.NetworkChannel;
+import java.nio.channels.SocketChannel;
 
 import org.opencloudb.MycatServer;
 
@@ -34,13 +36,20 @@ import org.opencloudb.MycatServer;
  */
 public abstract class BackendConnectionFactory {
 
-	protected AsynchronousSocketChannel openSocketChannel() throws IOException {
-		AsynchronousSocketChannel channel = AsynchronousSocketChannel
-				.open(MycatServer.getInstance().getNextAsyncChannelGroup());
-		channel.setOption(StandardSocketOptions.SO_REUSEADDR, true);
-		channel.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
+	protected NetworkChannel openSocketChannel(boolean isAIO)
+			throws IOException {
+		if (isAIO) {
+			AsynchronousSocketChannel channel = AsynchronousSocketChannel
+					.open(MycatServer.getInstance().getNextAsyncChannelGroup());
 
-		return channel;
+			return channel;
+		} else {
+			SocketChannel channel = null;
+			channel = SocketChannel.open();
+			channel.configureBlocking(false);
+			return channel;
+		}
+
 	}
 
 }

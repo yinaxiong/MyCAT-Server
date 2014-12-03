@@ -25,7 +25,7 @@ package org.opencloudb.heartbeat;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.NetworkChannel;
 import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -61,9 +61,8 @@ public class MySQLDetector extends BackendAIOConnection {
 	private String schema;
 	private long heartbeatTimeout;
 	private final AtomicBoolean isQuit;
-	private String charset;
 
-	public MySQLDetector(AsynchronousSocketChannel channel) {
+	public MySQLDetector(NetworkChannel channel) {
 		super(channel);
 		this.clientFlags = CLIENT_FLAGS;
 		this.handler = new MySQLDetectorAuthenticator(this);
@@ -76,14 +75,6 @@ public class MySQLDetector extends BackendAIOConnection {
 
 	public void setHeartbeat(MySQLHeartbeat heartbeat) {
 		this.heartbeat = heartbeat;
-	}
-
-	public String getCharset() {
-		return charset;
-	}
-
-	public void setCharset(String charset) {
-		this.charset = charset;
 	}
 
 	public String getUser() {

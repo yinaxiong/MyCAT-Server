@@ -24,7 +24,7 @@
 package org.opencloudb.mysql.nio;
 
 import java.io.UnsupportedEncodingException;
-import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.NetworkChannel;
 import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -129,7 +129,6 @@ public class MySQLConnection extends BackendAIOConnection {
 	private long threadId;
 	private HandshakePacket handshake;
 	private volatile int charsetIndex;
-	private volatile String charset;
 	private volatile int txIsolation;
 	private volatile boolean autocommit;
 	private volatile boolean oldAutoCommit;
@@ -143,8 +142,7 @@ public class MySQLConnection extends BackendAIOConnection {
 	private final AtomicBoolean isQuit;
 	private volatile StatusSync statusSync;
 
-	public MySQLConnection(AsynchronousSocketChannel channel,
-			boolean fromSlaveDB) {
+	public MySQLConnection(NetworkChannel channel, boolean fromSlaveDB) {
 		super(channel);
 		this.clientFlags = CLIENT_FLAGS;
 		this.lastTime = TimeUtil.currentTimeMillis();
@@ -210,14 +208,6 @@ public class MySQLConnection extends BackendAIOConnection {
 
 	public void setThreadId(long threadId) {
 		this.threadId = threadId;
-	}
-
-	public String getCharset() {
-		return charset;
-	}
-
-	public void setCharset(String charset) {
-		this.charset = charset;
 	}
 
 	public boolean isAuthenticated() {
@@ -551,15 +541,14 @@ public class MySQLConnection extends BackendAIOConnection {
 
 	@Override
 	public void close(String reason) {
-		isQuit.set(true);
-		super.close(reason);
-		pool.connectionClosed(this);
-		if (isClosed.get()) {
+		if (!isClosed.get()) {
+			isQuit.set(true);
+			super.close(reason);
+			pool.connectionClosed(this);
 			if (this.respHandler != null) {
 				this.respHandler.connectionClose(this, reason);
 				respHandler = null;
 			}
-
 		}
 	}
 

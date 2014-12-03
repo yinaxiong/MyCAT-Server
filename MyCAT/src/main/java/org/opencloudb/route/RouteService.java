@@ -27,21 +27,18 @@ import java.sql.SQLNonTransientException;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.apache.log4j.Logger;
-import org.opencloudb.MycatServer;
 import org.opencloudb.cache.CachePool;
 import org.opencloudb.cache.CacheService;
 import org.opencloudb.cache.LayerCachePool;
 import org.opencloudb.config.model.SchemaConfig;
 import org.opencloudb.config.model.SystemConfig;
+import org.opencloudb.route.factory.RouteStrategyFactory;
 import org.opencloudb.route.handler.HintHandler;
-import org.opencloudb.route.handler.HintSQLHandler;
-import org.opencloudb.route.handler.HintSchemaHandler;
+import org.opencloudb.route.handler.HintHandlerFactory;
+import org.opencloudb.server.ServerConnection;
 import org.opencloudb.server.parser.ServerParse;
-import org.opencloudb.util.StringUtil;
 
 public class RouteService {
     private static final Logger LOGGER = Logger
@@ -51,11 +48,6 @@ public class RouteService {
 
     //sql注释的类型处理handler 集合，现在支持两种类型的处理：sql,schema
     private static Map<String,HintHandler> hintHandlerMap = new HashMap<String,HintHandler>();
-
-    static {
-        hintHandlerMap.put("sql",new HintSQLHandler());
-        hintHandlerMap.put("schema",new HintSchemaHandler());
-    }
 
 	public RouteService(CacheService cachService) {
 		sqlRouteCache = cachService.getCachePool("SQLRouteCache");
@@ -68,7 +60,7 @@ public class RouteService {
 	}
 
 	public RouteResultset route(SystemConfig sysconf, SchemaConfig schema,
-			int sqlType, String stmt, String charset, Object info)
+			int sqlType, String stmt, String charset, ServerConnection sc)
 			throws SQLNonTransientException {
 		RouteResultset rrs = null;
 		String cacheKey = null;
@@ -94,14 +86,15 @@ public class RouteService {
 						.trim();
 
                 int firstSplitPos = hint.indexOf(hintSplit);
+                
                 if(firstSplitPos > 0 ){
                     String hintType = hint.substring(0,firstSplitPos).trim().toLowerCase(Locale.US);
                     String hintValue = hint.substring(firstSplitPos + hintSplit.length()).trim();
                     String realSQL = stmt.substring(endPos + "*/".length()).trim();
 
-                    HintHandler hintHandler = hintHandlerMap.get(hintType);
+                    HintHandler hintHandler = HintHandlerFactory.getHintHandler(hintType);
                     if(hintHandler != null){
-                        rrs = hintHandler.route(sysconf,schema,sqlType,realSQL,charset,info,tableId2DataNodeCache,
+                        rrs = hintHandler.route(sysconf,schema,sqlType,realSQL,charset,sc,tableId2DataNodeCache,
                                 hintValue);
                     }else{
                         LOGGER.warn("TODO , support hint sql type : " + hintType);
@@ -110,8 +103,8 @@ public class RouteService {
 			}
 		} else {
 			stmt = stmt.trim();
-			rrs = ServerRouterUtil.route(sysconf, schema, sqlType, stmt,
-					charset, info, tableId2DataNodeCache);
+			rrs = RouteStrategyFactory.getRouteStrategy().route(sysconf, schema, sqlType, stmt,
+					charset, sc, tableId2DataNodeCache);
 		}
 
 		if (sqlType == ServerParse.SELECT && rrs.isCacheAble()) {

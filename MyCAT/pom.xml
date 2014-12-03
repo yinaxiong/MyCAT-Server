@@ -16,15 +16,20 @@
 			<buildNumber>${maven.build.timestamp}</buildNumber -->
 	</properties>
 	<scm>
-		<connection>scm:svn:http://code.taobao.org/svn/openclouddb/trunk</connection>
-		<developerConnection>scm:svn:http://code.taobao.org/svn/openclouddb/trunk</developerConnection>
-		<url>http://code.taobao.org/svn/openclouddb/trunk</url>
+		<connection>scm:git:ssh://apachemycat@github.com/MyCATApache/MyCAT-Server.git</connection>
+		<developerConnection>scm:git:ssh://apachemycat@github.com/MyCATApache/MyCAT-Server.git</developerConnection>
+		<url>scm:git:ssh://apachemycat@github.com/MyCATApache/MyCAT-Server.git</url>
 	</scm>
 	<dependencies>
 		<dependency>
-			<groupId>com.foundationdb</groupId>
-			<artifactId>fdb-sql-parser</artifactId>
-			<version>1.3.0</version>
+		    <groupId>com.foundationdb</groupId>
+		    <artifactId>fdb-sql-parser</artifactId>
+		    <version>1.5.0</version>
+		</dependency>
+		<dependency>
+		     <groupId>com.alibaba</groupId>
+		     <artifactId>druid</artifactId>
+		     <version>1.0.10</version>
 		</dependency>
 		<dependency>
 			<groupId>log4j</groupId>
@@ -282,9 +287,27 @@
 			</plugin>
 
 			<plugin>
+	         <groupId>org.apache.maven.plugins</groupId>
+	         <artifactId>maven-scm-plugin</artifactId>
+	            <version>1.9.2</version>
+	         <configuration>
+	          <providerImplementations>
+	              <git>jgit</git>
+	          </providerImplementations>
+	         </configuration>
+	         <dependencies>
+	          <dependency>
+	              <groupId>org.apache.maven.scm</groupId>
+	              <artifactId>maven-scm-provider-jgit</artifactId>
+	                    <version>1.9.2</version>
+	          </dependency>
+	         </dependencies>
+       </plugin>
+
+			<plugin>
 				<groupId>org.codehaus.mojo</groupId>
 				<artifactId>buildnumber-maven-plugin</artifactId>
-				<version>1.2</version>
+				<version>1.3</version>
 				<executions>
 					<execution>
 						<phase>validate</phase>
@@ -303,18 +326,18 @@
 					<doUpdate>false</doUpdate>
 
 					<providerImplementations>
-						<svn>javasvn</svn>
+						<git>git</git>
 					</providerImplementations>
 
 				</configuration>
 
 				<dependencies>
 					<dependency>
-						<groupId>com.google.code.maven-scm-provider-svnjava</groupId>
-						<artifactId>maven-scm-provider-svnjava</artifactId>
-						<version>RELEASE</version>
-					</dependency>
-					<dependency>
+				      <groupId>org.apache.maven.scm</groupId>
+				      <artifactId>maven-scm-provider-gitexe</artifactId>
+				      <version>RELEASE</version>
+				    </dependency>  
+      				<dependency>
 						<groupId>org.tmatesoft.svnkit</groupId>
 						<artifactId>svnkit</artifactId>
 						<version>RELEASE</version>

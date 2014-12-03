@@ -384,9 +384,17 @@ public class SelectSQLAnalyser {
 				.getJoinClause();
 		if (joinClause instanceof BinaryRelationalOperatorNode) {
 			BinaryRelationalOperatorNode joinOpt = (BinaryRelationalOperatorNode) joinClause;
-			addTableJoinInf(parsInf.ctx,
-					(ColumnReference) joinOpt.getLeftOperand(),
-					(ColumnReference) joinOpt.getRightOperand());
+			// 以下逻辑是为了添加JoinRel，最终用在路由计算上，见ServerRouterUtil中tryRouteForTables中。
+			// 路由计算时根据JoinRel，移除掉非root table
+			if (joinOpt.getLeftOperand() instanceof ColumnReference) {// join的on条件为on tableA.a = tableB.b
+				addTableJoinInf(parsInf.ctx,
+						(ColumnReference) joinOpt.getLeftOperand(),
+						(ColumnReference) joinOpt.getRightOperand());
+			} else {// join的on条件不是 tableA.a = tableB.b，如：ON INSTR(tableA.a,tableB.b) > 0
+				// TODO 条件不是tableA.a = tableB.b类型的一般都是非父子表关系，该情况下暂时没处理
+				LOGGER.info("TODO,  not supported parse join condition: \n"
+						+ new NodeToString().toString(joinOpt));
+			}
 		} else if (joinClause instanceof AndNode
 				|| joinClause instanceof OrNode) {
 			BinaryRelationalOperatorNode joinOpt = (BinaryRelationalOperatorNode) joinClause
