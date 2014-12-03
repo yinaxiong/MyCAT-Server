@@ -24,6 +24,7 @@
 package org.opencloudb.net;
 
 public interface ClosableConnection {
+	String getCharset();
 	/**
 	 * 关闭连接
 	 */

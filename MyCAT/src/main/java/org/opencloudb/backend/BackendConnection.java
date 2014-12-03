@@ -39,7 +39,7 @@ public interface BackendConnection extends ClosableConnection {
 
 	// public long getThreadId();
 
-	public String getCharset();
+
 
 	public void execute(RouteResultsetNode node, ServerConnection source,
 			boolean autocommit) throws IOException;
@@ -60,6 +60,5 @@ public interface BackendConnection extends ClosableConnection {
 
 	public long getId();
 
-	public boolean isFake();
 
 }

@@ -32,8 +32,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.log4j.Logger;
@@ -43,9 +42,14 @@ import org.opencloudb.cache.CacheService;
 import org.opencloudb.config.model.SystemConfig;
 import org.opencloudb.interceptor.SQLInterceptor;
 import org.opencloudb.manager.ManagerConnectionFactory;
+import org.opencloudb.net.AIOAcceptor;
+import org.opencloudb.net.AIOConnector;
 import org.opencloudb.net.NIOAcceptor;
 import org.opencloudb.net.NIOConnector;
 import org.opencloudb.net.NIOProcessor;
+import org.opencloudb.net.NIOReactorPool;
+import org.opencloudb.net.SocketAcceptor;
+import org.opencloudb.net.SocketConnector;
 import org.opencloudb.route.MyCATSequnceProcessor;
 import org.opencloudb.route.RouteService;
 import org.opencloudb.server.ServerConnectionFactory;
@@ -66,12 +70,13 @@ public class MycatServer {
 	private final RouteService routerService;
 	private final CacheService cacheService;
 	private Properties dnIndexProperties;
-	private final AsynchronousChannelGroup[] asyncChannelGroups;
+	private AsynchronousChannelGroup[] asyncChannelGroups;
 	private volatile int channelIndex = 0;
 	private final MyCATSequnceProcessor sequnceProcessor = new MyCATSequnceProcessor();
 	private final SQLInterceptor sqlInterceptor;
 	private volatile int nextProcessor;
 	private BufferPool bufferPool;
+	private boolean aio = false;
 
 	public static final MycatServer getInstance() {
 		return INSTANCE;
@@ -83,44 +88,14 @@ public class MycatServer {
 	private final AtomicBoolean isOnline;
 	private final long startupTime;
 	private NIOProcessor[] processors;
-	private NIOConnector connector;
-	private NIOAcceptor manager;
-	private NIOAcceptor server;
+	private SocketConnector connector;
 	private NameableExecutor businessExecutor;
 
 	public MycatServer() {
 		this.config = new MycatConfig();
-		SystemConfig system = config.getSystem();
-		int processorCount = system.getProcessors();
-		asyncChannelGroups = new AsynchronousChannelGroup[processorCount];
-		// startup processors
-		int threadPoolSize = system.getProcessorExecutor();
-		try {
-			processors = new NIOProcessor[processorCount];
-			int processBuferPool = system.getProcessorBufferPool();
-			int processBufferChunk = system.getProcessorBufferChunk();
-			int socketBufferLocalPercent = system
-					.getProcessorBufferLocalPercent();
-			bufferPool = new BufferPool(processBuferPool, processBufferChunk,
-					socketBufferLocalPercent / threadPoolSize);
-			businessExecutor = ExecutorUtil.create("BusinessExecutor",
-					threadPoolSize);
-			for (int i = 0; i < processors.length; i++) {
-				asyncChannelGroups[i] = AsynchronousChannelGroup
-						.withThreadPool(businessExecutor);
-				processors[i] = new NIOProcessor("Processor" + i, bufferPool,
-						businessExecutor);
-			}
-
-			// startup connector
-			connector = new NIOConnector(processors);
-			connector.setWriteQueueCapcity(system.getFrontWriteQueueSize());
-
-		} catch (IOException e) {
-			throw new RuntimeException(e);
-		}
 		this.timer = new Timer(NAME + "Timer", true);
-		this.sqlRecorder = new SQLRecorder(system.getSqlRecordCount());
+		this.sqlRecorder = new SQLRecorder(config.getSystem()
+				.getSqlRecordCount());
 		this.isOnline = new AtomicBoolean(true);
 		cacheService = new CacheService();
 		routerService = new RouteService(cacheService);
@@ -128,7 +103,7 @@ public class MycatServer {
 		dnIndexProperties = loadDnIndexProps();
 		try {
 			sqlInterceptor = (SQLInterceptor) Class.forName(
-					system.getSqlInterceptor()).newInstance();
+					config.getSystem().getSqlInterceptor()).newInstance();
 		} catch (Exception e) {
 			throw new RuntimeException(e);
 		}
@@ -179,10 +154,13 @@ public class MycatServer {
 	}
 
 	public void startup() throws IOException {
+
+		SystemConfig system = config.getSystem();
+		int processorCount = system.getProcessors();
+
 		// server startup
 		LOGGER.info("===============================================");
 		LOGGER.info(NAME + " is ready to startup ...");
-		SystemConfig system = config.getSystem();
 		String inf = "Startup processors ...,total processors:"
 				+ system.getProcessors() + ",aio thread pool size:"
 				+ system.getProcessorExecutor()
@@ -194,10 +172,87 @@ public class MycatServer {
 				/ system.getProcessorBufferChunk();
 		LOGGER.info(inf);
 		LOGGER.info("sysconfig params:" + system.toString());
-		timer.schedule(updateTime(), 0L, TIME_UPDATE_PERIOD);
 
-		timer.schedule(processorCheck(), 0L, system.getProcessorCheckPeriod());
+		// startup manager
+		ManagerConnectionFactory mf = new ManagerConnectionFactory();
+		ServerConnectionFactory sf = new ServerConnectionFactory();
+		SocketAcceptor manager = null;
+		SocketAcceptor server = null;
+		aio = (system.getUsingAIO() == 1);
 
+		// startup processors
+		int threadPoolSize = system.getProcessorExecutor();
+		processors = new NIOProcessor[processorCount];
+		int processBuferPool = system.getProcessorBufferPool();
+		int processBufferChunk = system.getProcessorBufferChunk();
+		int socketBufferLocalPercent = system.getProcessorBufferLocalPercent();
+		bufferPool = new BufferPool(processBuferPool, processBufferChunk,
+				socketBufferLocalPercent / processorCount);
+		businessExecutor = ExecutorUtil.create("BusinessExecutor",
+				threadPoolSize);
+
+		for (int i = 0; i < processors.length; i++) {
+			processors[i] = new NIOProcessor("Processor" + i, bufferPool,
+					businessExecutor);
+		}
+
+		if (aio) {
+			LOGGER.info("using aio network handler ");
+			asyncChannelGroups = new AsynchronousChannelGroup[processorCount];
+			// startup connector
+			connector = new AIOConnector();
+			for (int i = 0; i < processors.length; i++) {
+				asyncChannelGroups[i] = AsynchronousChannelGroup
+						.withFixedThreadPool(processorCount,
+								new ThreadFactory() {
+									private int inx = 1;
+
+									@Override
+									public Thread newThread(Runnable r) {
+										Thread th = new Thread(r);
+										th.setName(BufferPool.LOCAL_BUF_THREAD_PREX
+												+ "AIO" + (inx++));
+										LOGGER.info("created new AIO thread "
+												+ th.getName());
+										return th;
+									}
+								});
+
+			}
+			manager = new AIOAcceptor(NAME + "Manager", system.getBindIp(),
+					system.getManagerPort(), mf, this.asyncChannelGroups[0]);
+
+			// startup server
+
+			server = new AIOAcceptor(NAME + "Server", system.getBindIp(),
+					system.getServerPort(), sf, this.asyncChannelGroups[0]);
+
+		} else {
+			LOGGER.info("using nio network handler ");
+			NIOReactorPool reactorPool = new NIOReactorPool(
+					BufferPool.LOCAL_BUF_THREAD_PREX + "NIOREACTOR",
+					processors.length);
+			connector = new NIOConnector(BufferPool.LOCAL_BUF_THREAD_PREX
+					+ "NIOConnector", reactorPool);
+			((NIOConnector) connector).start();
+
+			manager = new NIOAcceptor(BufferPool.LOCAL_BUF_THREAD_PREX + NAME
+					+ "Manager", system.getBindIp(), system.getManagerPort(),
+					mf, reactorPool);
+
+			server = new NIOAcceptor(BufferPool.LOCAL_BUF_THREAD_PREX + NAME
+					+ "Server", system.getBindIp(), system.getServerPort(), sf,
+					reactorPool);
+		}
+		// manager start
+		manager.start();
+		LOGGER.info(manager.getName() + " is started and listening on "
+				+ manager.getPort());
+		server.start();
+		// server started
+		LOGGER.info(server.getName() + " is started and listening on "
+				+ server.getPort());
+		LOGGER.info("===============================================");
 		// init datahost
 		Map<String, PhysicalDBPool> dataHosts = config.getDataHosts();
 		LOGGER.info("Initialize dataHost ...");
@@ -211,34 +266,14 @@ public class MycatServer {
 			node.init(Integer.valueOf(index));
 			node.startHeartbeat();
 		}
+		timer.schedule(updateTime(), 0L, TIME_UPDATE_PERIOD);
+		timer.schedule(processorCheck(), 0L, system.getProcessorCheckPeriod());
 		long dataNodeIldeCheckPeriod = system.getDataNodeIdleCheckPeriod();
 		timer.schedule(dataNodeConHeartBeatCheck(dataNodeIldeCheckPeriod), 0L,
 				dataNodeIldeCheckPeriod);
 		timer.schedule(dataNodeHeartbeat(), 0L,
 				system.getDataNodeHeartbeatPeriod());
 
-		// startup manager
-		ManagerConnectionFactory mf = new ManagerConnectionFactory();
-		mf.setCharset(system.getCharset());
-		mf.setIdleTimeout(system.getIdleTimeout());
-		manager = new NIOAcceptor(NAME + "Manager", system.getBindIp(),
-				system.getManagerPort(), mf, this.asyncChannelGroups[0]);
-		manager.start();
-		LOGGER.info(manager.getName() + " is started and listening on "
-				+ manager.getPort());
-
-		// startup server
-		ServerConnectionFactory sf = new ServerConnectionFactory();
-		sf.setWriteQueueCapcity(system.getFrontWriteQueueSize());
-		sf.setCharset(system.getCharset());
-		sf.setIdleTimeout(system.getIdleTimeout());
-		server = new NIOAcceptor(NAME + "Server", system.getBindIp(),
-				system.getServerPort(), sf, this.asyncChannelGroups[0]);
-		server.start();
-		// server started
-		LOGGER.info(server.getName() + " is started and listening on "
-				+ server.getPort());
-		LOGGER.info("===============================================");
 	}
 
 	private Properties loadDnIndexProps() {
@@ -323,19 +358,17 @@ public class MycatServer {
 	}
 
 	public NIOProcessor nextProcessor() {
-		int inx = ++nextProcessor;
-		if (inx >= processors.length) {
+		if (++nextProcessor == processors.length) {
 			nextProcessor = 0;
-			inx = 0;
 		}
-		return processors[inx];
+		return processors[nextProcessor];
 	}
 
 	public NIOProcessor[] getProcessors() {
 		return processors;
 	}
 
-	public NIOConnector getConnector() {
+	public SocketConnector getConnector() {
 		return connector;
 	}
 
@@ -446,5 +479,9 @@ public class MycatServer {
 				});
 			}
 		};
+	}
+
+	public boolean isAIO() {
+		return aio;
 	}
 }

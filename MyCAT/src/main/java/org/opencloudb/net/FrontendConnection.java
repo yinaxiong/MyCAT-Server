@@ -28,6 +28,8 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.InetSocketAddress;
 import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.NetworkChannel;
+import java.nio.channels.SocketChannel;
 import java.util.Set;
 
 import org.apache.log4j.Logger;
@@ -58,7 +60,6 @@ public abstract class FrontendConnection extends AbstractConnection {
 	protected int port;
 	protected int localPort;
 	protected long idleTimeout;
-	protected String charset;
 	protected int charsetIndex;
 	protected byte[] seed;
 	protected String user;
@@ -70,13 +71,18 @@ public abstract class FrontendConnection extends AbstractConnection {
 	protected boolean isAccepted;
 	protected boolean isAuthenticated;
 
-	public FrontendConnection(AsynchronousSocketChannel channel)
-			throws IOException {
+	public FrontendConnection(NetworkChannel channel) throws IOException {
 		super(channel);
 		InetSocketAddress localAddr = (InetSocketAddress) channel
 				.getLocalAddress();
-		InetSocketAddress remoteAddr = (InetSocketAddress) channel
-				.getRemoteAddress();
+		InetSocketAddress remoteAddr = null;
+		if (channel instanceof SocketChannel) {
+			remoteAddr = (InetSocketAddress) ((SocketChannel) channel)
+					.getRemoteAddress();
+		} else if (channel instanceof AsynchronousSocketChannel) {
+			remoteAddr = (InetSocketAddress) ((AsynchronousSocketChannel) channel)
+					.getRemoteAddress();
+		}
 		this.host = remoteAddr.getHostString();
 		this.port = localAddr.getPort();
 		this.localPort = remoteAddr.getPort();
@@ -172,16 +178,10 @@ public abstract class FrontendConnection extends AbstractConnection {
 	public boolean setCharsetIndex(int ci) {
 		String charset = CharsetUtil.getCharset(ci);
 		if (charset != null) {
-			this.charset = charset;
-			this.charsetIndex = ci;
-			return true;
+			return setCharset(charset);
 		} else {
 			return false;
 		}
-	}
-
-	public String getCharset() {
-		return charset;
 	}
 
 	public boolean setCharset(String charset) {

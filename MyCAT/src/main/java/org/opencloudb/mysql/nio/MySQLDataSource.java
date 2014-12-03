@@ -56,9 +56,8 @@ public class MySQLDataSource extends PhysicalDatasource {
 		return new MySQLHeartbeat(this);
 	}
 
-	public void connectionClosed(MySQLConnection mySQLConnection) {
-		// TODO Auto-generated method stub
-		
-	}
+	
+
+	
 
 }

@@ -154,8 +154,17 @@ public final class NIOProcessor {
 				c.cleanup();
 				it.remove();
 			} else {
+				// very important ,for some data maybe not sent
+				checkConSendQueue(c);
 				c.idleCheck();
 			}
+		}
+	}
+
+	private void checkConSendQueue(AbstractConnection c) {
+		// very important ,for some data maybe not sent
+		if (!c.writeQueue.isEmpty()) {
+			c.getSocketWR().doNextWriteCheck();
 		}
 	}
 
@@ -169,7 +178,7 @@ public final class NIOProcessor {
 			BackendConnection c = it.next().getValue();
 
 			// 删除空连接
-			if (c == null || c.isFake()) {
+			if (c == null) {
 				it.remove();
 				continue;
 			}
@@ -187,6 +196,10 @@ public final class NIOProcessor {
 				it.remove();
 
 			} else {
+				// very important ,for some data maybe not sent
+				if (c instanceof AbstractConnection) {
+					checkConSendQueue((AbstractConnection) c);
+				}
 				c.idleCheck();
 			}
 		}

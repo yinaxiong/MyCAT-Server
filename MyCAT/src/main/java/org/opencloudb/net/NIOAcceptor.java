@@ -25,12 +25,13 @@ package org.opencloudb.net;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.StandardSocketOptions;
-import java.nio.channels.AsynchronousChannelGroup;
-import java.nio.channels.AsynchronousServerSocketChannel;
-import java.nio.channels.AsynchronousSocketChannel;
-import java.nio.channels.CompletionHandler;
-import java.util.concurrent.atomic.AtomicLong;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.util.Set;
 
 import org.apache.log4j.Logger;
 import org.opencloudb.MycatServer;
@@ -39,38 +40,33 @@ import org.opencloudb.net.factory.FrontendConnectionFactory;
 /**
  * @author mycat
  */
-public final class NIOAcceptor implements
-		CompletionHandler<AsynchronousSocketChannel, Long> {
+public final class NIOAcceptor extends Thread  implements SocketAcceptor{
 	private static final Logger LOGGER = Logger.getLogger(NIOAcceptor.class);
 	private static final AcceptIdGenerator ID_GENERATOR = new AcceptIdGenerator();
 
 	private final int port;
-	private final AsynchronousServerSocketChannel serverChannel;
+	private final Selector selector;
+	private final ServerSocketChannel serverChannel;
 	private final FrontendConnectionFactory factory;
-
 	private long acceptCount;
-	private final String name;
+	private final NIOReactorPool reactorPool;
 
-	public NIOAcceptor(String name, String ip, int port,
-			FrontendConnectionFactory factory, AsynchronousChannelGroup group)
+	public NIOAcceptor(String name, String bindIp,int port, 
+			FrontendConnectionFactory factory, NIOReactorPool reactorPool)
 			throws IOException {
-		this.name = name;
+		super.setName(name);
 		this.port = port;
-		this.factory = factory;
-		serverChannel = AsynchronousServerSocketChannel.open(group);
+		this.selector = Selector.open();
+		this.serverChannel = ServerSocketChannel.open();
+		this.serverChannel.configureBlocking(false);
 		/** 设置TCP属性 */
 		serverChannel.setOption(StandardSocketOptions.SO_REUSEADDR, true);
-		serverChannel.setOption(StandardSocketOptions.SO_RCVBUF, 1024 * 16*2);
+		serverChannel.setOption(StandardSocketOptions.SO_RCVBUF, 1024 * 16 * 2);
 		// backlog=100
-		serverChannel.bind(new InetSocketAddress(ip, port), 100);
-	}
-
-	public String getName() {
-		return name;
-	}
-
-	public void start() {
-		this.pendingAccept();
+		serverChannel.bind(new InetSocketAddress(bindIp, port), 100);
+		this.serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+		this.factory = factory;
+		this.reactorPool = reactorPool;
 	}
 
 	public int getPort() {
@@ -81,48 +77,62 @@ public final class NIOAcceptor implements
 		return acceptCount;
 	}
 
-	private void accept(AsynchronousSocketChannel channel, Long id) {
+	@Override
+	public void run() {
+		final Selector selector = this.selector;
+		for (;;) {
+			++acceptCount;
+			try {
+				selector.select(1000L);
+				Set<SelectionKey> keys = selector.selectedKeys();
+				try {
+					for (SelectionKey key : keys) {
+						if (key.isValid() && key.isAcceptable()) {
+							accept();
+						} else {
+							key.cancel();
+						}
+					}
+				} finally {
+					keys.clear();
+				}
+			} catch (Throwable e) {
+				LOGGER.warn(getName(), e);
+			}
+		}
+	}
+
+	private void accept() {
+		SocketChannel channel = null;
 		try {
+			channel = serverChannel.accept();
+			channel.configureBlocking(false);
 			FrontendConnection c = factory.make(channel);
 			c.setAccepted(true);
-			c.setId(id);
-			NIOProcessor processor = MycatServer.getInstance().nextProcessor();
+			c.setId(ID_GENERATOR.getId());
+			NIOProcessor processor = (NIOProcessor) MycatServer.getInstance()
+					.nextProcessor();
 			c.setProcessor(processor);
-			c.register();
+			
+			NIOReactor reactor = reactorPool.getNextReactor();
+			reactor.postRegister(c);
+
 		} catch (Throwable e) {
 			closeChannel(channel);
+			LOGGER.warn(getName(), e);
 		}
 	}
 
-	private void pendingAccept() {
-		if (serverChannel.isOpen()) {
-			serverChannel.accept(ID_GENERATOR.getId(), this);
-		} else {
-			throw new IllegalStateException(
-					"MyCAT Server Channel has been closed");
-		}
-
-	}
-
-	@Override
-	public void completed(AsynchronousSocketChannel result, Long id) {
-		accept(result, id);
-		// next pending waiting
-		pendingAccept();
-
-	}
-
-	@Override
-	public void failed(Throwable exc, Long id) {
-		LOGGER.info("acception connect failed:" + exc);
-		// next pending waiting
-		pendingAccept();
-
-	}
-
-	private static void closeChannel(AsynchronousSocketChannel channel) {
+	private static void closeChannel(SocketChannel channel) {
 		if (channel == null) {
 			return;
+		}
+		Socket socket = channel.socket();
+		if (socket != null) {
+			try {
+				socket.close();
+			} catch (IOException e) {
+			}
 		}
 		try {
 			channel.close();
@@ -139,22 +149,17 @@ public final class NIOAcceptor implements
 
 		private static final long MAX_VALUE = 0xffffffffL;
 
-		private AtomicLong acceptId = new AtomicLong();
+		private long acceptId = 0L;
 		private final Object lock = new Object();
 
 		private long getId() {
-			long newValue = acceptId.getAndIncrement();
-			if (newValue >= MAX_VALUE) {
-				synchronized (lock) {
-					newValue = acceptId.getAndIncrement();
-					if (newValue >= MAX_VALUE) {
-						acceptId.set(0);
-					}
+			synchronized (lock) {
+				if (acceptId >= MAX_VALUE) {
+					acceptId = 0L;
 				}
-				return acceptId.getAndDecrement();
-			} else {
-				return newValue;
+				return ++acceptId;
 			}
 		}
 	}
+
 }

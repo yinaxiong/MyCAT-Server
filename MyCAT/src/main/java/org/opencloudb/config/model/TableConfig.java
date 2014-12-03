@@ -113,6 +113,10 @@ public class TableConfig {
 	public String getLocateRTableKeySql() {
 		return locateRTableKeySql;
 	}
+	
+	public boolean isGlobalTable() {
+		return this.tableType == TableConfig.TYPE_GLOBAL_TABLE;
+	}
 
 	public String genLocateRootParentSQL() {
 		TableConfig tb = this;

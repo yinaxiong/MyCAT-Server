@@ -201,9 +201,8 @@ public class NonBlockingSession implements Session {
 	 * {@link ServerConnection#isClosed()} must be true before invoking this
 	 */
 	public void terminate() {
-		for (RouteResultsetNode node : target.keySet()) {
-			BackendConnection c = target.get(node);
-			c.close("client closed ");
+		for (BackendConnection node : target.values()) {
+			node.close("client closed ");
 		}
 		clearHandlesResources();
 	}

@@ -59,7 +59,8 @@ import org.opencloudb.mpp.UpdateSQLAnalyser;
 import org.opencloudb.mysql.nio.handler.FetchStoreNodeOfChildTableHandler;
 import org.opencloudb.parser.SQLParserDelegate;
 import org.opencloudb.route.function.AbstractPartionAlgorithm;
-import org.opencloudb.server.NonBlockingSession;
+import org.opencloudb.route.util.RouterUtil;
+import org.opencloudb.server.ServerConnection;
 import org.opencloudb.server.parser.ServerParse;
 import org.opencloudb.util.StringUtil;
 
@@ -72,14 +73,14 @@ import com.foundationdb.sql.parser.SelectNode;
 
 /**
  * 数据路由服务工具类
- * 
+ * @deprecated  该类的逻辑转移到FdbRouteStrategy类，部分工具类方法移到RouterUtil类，该类可以废弃掉
+ * @see org.opencloudb.route.impl.FdbRouteStrategy
  * @author mycat
  * 
  */
 
 public final class ServerRouterUtil {
-	private static final Logger LOGGER = Logger
-			.getLogger(ServerRouterUtil.class);
+	private static final Logger LOGGER = Logger.getLogger(ServerRouterUtil.class);
 	private static final Random rand = new Random();
 
 	/**
@@ -102,54 +103,17 @@ public final class ServerRouterUtil {
 	 */
 	public static RouteResultset route(SystemConfig sysConfig,
 			SchemaConfig schema, int sqlType, String origSQL, String charset,
-			Object session, LayerCachePool cachePool)
+			ServerConnection sc, LayerCachePool cachePool)
 			throws SQLNonTransientException {
 
-		// 检查是否有全局序列号的，需要异步处理
-		// @micmiu 简单模糊判断SQL是否包含sequence
-
-		if (origSQL.indexOf(" MYCATSEQ_") != -1) {
-			SessionSQLPair pair = new SessionSQLPair(
-					(NonBlockingSession) session, schema, origSQL, sqlType);
-			MycatServer.getInstance().getSequnceProcessor().addNewSql(pair);
+		if (processWithMycatSeq(sysConfig,schema, sqlType, origSQL, charset,sc, cachePool) || 
+			(sqlType == ServerParse.INSERT && processInsert(sysConfig,schema,sqlType,origSQL,charset,sc,cachePool))) {
 			return null;
 		}
 
-		if (sqlType == ServerParse.INSERT) {
-			String tableName = StringUtil.getTableName(origSQL).toUpperCase();
-			TableConfig tableConfig = schema.getTables().get(tableName);
-			if (null != tableConfig && tableConfig.isAutoIncrement()) {
-				String primaryKey = tableConfig.getPrimaryKey();
-				int firstLeftBracketIndex = origSQL.indexOf("(") + 1;
-				int firstRightBracketIndex = origSQL.indexOf(")");
-				int lastLeftBracketIndex = origSQL.lastIndexOf("(") + 1;
-				String insertFieldsSQL = origSQL.substring(firstLeftBracketIndex, firstRightBracketIndex);
-				
-				if(!insertFieldsSQL.toUpperCase().contains(primaryKey)){
-					int primaryKeyLength=primaryKey.length();
-					int insertSegOffset=firstLeftBracketIndex;
-					StringBuilder newSQLBuilder=new StringBuilder(origSQL).insert(insertSegOffset,primaryKey);
-					
-					insertSegOffset+=primaryKeyLength;
-					newSQLBuilder.insert(insertSegOffset,',');
-					
-					insertSegOffset=lastLeftBracketIndex+primaryKeyLength+1;
-					String mycatSeqPrefix="next value for MYCATSEQ_";
-				    newSQLBuilder.insert(insertSegOffset,mycatSeqPrefix);
-				    
-				    insertSegOffset+=mycatSeqPrefix.length();
-				    newSQLBuilder.insert(insertSegOffset, tableName).insert(insertSegOffset+tableName.length(), ',');
-					
-					SessionSQLPair pair = new SessionSQLPair((NonBlockingSession) session, schema,newSQLBuilder.toString(), sqlType);
-					MycatServer.getInstance().getSequnceProcessor().addNewSql(pair);
-					return null;
-				}
-			}
-		}
-
 		// user handler
-		String stmt = MycatServer.getInstance().getSqlInterceptor()
-				.interceptSQL(origSQL, sqlType);
+		String stmt = MycatServer.getInstance().getSqlInterceptor().interceptSQL(origSQL, sqlType);
+		
 		if (origSQL != stmt && LOGGER.isDebugEnabled()) {
 			LOGGER.debug("sql intercepted to " + stmt + " from " + origSQL);
 		}
@@ -157,192 +121,275 @@ public final class ServerRouterUtil {
 			stmt = removeSchema(stmt, schema.getName());
 		}
 		RouteResultset rrs = new RouteResultset(stmt, sqlType);
-
-		// 检查schema是否含有拆分库
+		
+		// check if there is sharding in schema
 		if (schema.isNoSharding()) {
 			return routeToSingleNode(rrs, schema.getDataNode(), stmt);
 		}
-		// 判断是否是show tables 之类的语句
-		if (sqlType == ServerParse.SHOW) {
+		
+		RouteResultset returnedSet=routeSystemInfo(schema, sqlType, stmt, rrs);
+		if(returnedSet==null){
+			return routeNormalSqlWithAST(schema, stmt, rrs, charset, cachePool);
+		}
+		return returnedSet;
+	}
+	
+	private static void processSQL(ServerConnection sc,SchemaConfig schema,String sql,int sqlType){
+		MycatServer.getInstance().getSequnceProcessor().addNewSql(new SessionSQLPair(sc.getSession2(), schema, sql, sqlType));
+	}
+	private static boolean isPKInFields(String origSQL,String primaryKey,int firstLeftBracketIndex,int firstRightBracketIndex){
+		boolean isPrimaryKeyInFields=false;
+		String upperSQL=origSQL.substring(firstLeftBracketIndex,firstRightBracketIndex+1).toUpperCase();
+		for(int pkOffset=0,primaryKeyLength=primaryKey.length(),pkStart=0;;){
+			pkStart=upperSQL.indexOf(primaryKey, pkOffset);
+			if(pkStart>=0 && pkStart<firstRightBracketIndex){
+				char pkSide=upperSQL.charAt(pkStart-1);
+				if(pkSide<=' ' || pkSide=='`' || pkSide==',' || pkSide=='('){
+					pkSide=upperSQL.charAt(pkStart+primaryKey.length());
+					isPrimaryKeyInFields=pkSide<=' ' || pkSide=='`' || pkSide==',' || pkSide==')';
+				}
+				if(isPrimaryKeyInFields){
+					break;
+				}
+				pkOffset=pkStart+primaryKeyLength;
+			}else{
+				break;
+			}
+		}
+		return isPrimaryKeyInFields;
+	}
+	private static void processInsert(ServerConnection sc,SchemaConfig schema,int sqlType,String origSQL,String tableName,String primaryKey,int firstLeftBracketIndex,int lastLeftBracketIndex){
+		int primaryKeyLength=primaryKey.length();
+		int insertSegOffset=firstLeftBracketIndex;
+		String mycatSeqPrefix="next value for MYCATSEQ_";
+		int mycatSeqPrefixLength=mycatSeqPrefix.length();
+		int tableNameLength=tableName.length();
+		
+		char[] newSQLBuf=new char[origSQL.length()+primaryKeyLength+mycatSeqPrefixLength+tableNameLength+2];
+		origSQL.getChars(0, firstLeftBracketIndex, newSQLBuf, 0);
+		primaryKey.getChars(0,primaryKeyLength,newSQLBuf,insertSegOffset);
+		insertSegOffset+=primaryKeyLength;
+		newSQLBuf[insertSegOffset]=',';
+		insertSegOffset++;
+		origSQL.getChars(firstLeftBracketIndex,lastLeftBracketIndex,newSQLBuf,insertSegOffset);
+		insertSegOffset+=lastLeftBracketIndex-firstLeftBracketIndex;
+		mycatSeqPrefix.getChars(0, mycatSeqPrefixLength, newSQLBuf, insertSegOffset);
+		insertSegOffset+=mycatSeqPrefixLength;
+		tableName.getChars(0,tableNameLength,newSQLBuf,insertSegOffset);
+		insertSegOffset+=tableNameLength;
+		newSQLBuf[insertSegOffset]=',';
+		insertSegOffset++;
+		origSQL.getChars(lastLeftBracketIndex, origSQL.length(), newSQLBuf, insertSegOffset);
+		
+		processSQL(sc,schema,new String(newSQLBuf),sqlType);
+	}
+	private static boolean processInsert(ServerConnection sc,SchemaConfig schema,int sqlType,String origSQL,String tableName,String primaryKey){
+		int firstLeftBracketIndex = origSQL.indexOf("(") + 1;
+		int firstRightBracketIndex = origSQL.indexOf(")");
+
+		boolean processedInsert=!isPKInFields(origSQL,primaryKey,firstLeftBracketIndex,firstRightBracketIndex);
+		if(processedInsert){
+			processInsert(sc,schema,sqlType,origSQL,tableName,primaryKey,firstLeftBracketIndex,firstRightBracketIndex);
+		}
+		return processedInsert;
+	}
+	private static boolean processInsert(SystemConfig sysConfig,
+			SchemaConfig schema, int sqlType, String origSQL, String charset,
+			ServerConnection sc, LayerCachePool cachePool){
+		String tableName = StringUtil.getTableName(origSQL).toUpperCase();
+		TableConfig tableConfig = schema.getTables().get(tableName);
+		boolean processedInsert=false;
+		if (null != tableConfig && tableConfig.isAutoIncrement()) {
+			String primaryKey = tableConfig.getPrimaryKey();
+			processedInsert=processInsert(sc,schema,sqlType,origSQL,tableName,primaryKey);
+		}
+		return processedInsert;
+	}
+	private static RouteResultset routeSelect(SchemaConfig schema,QueryTreeNode ast,RouteResultset rrs,String stmt, LayerCachePool cachePool) throws SQLNonTransientException{
+		ResultSetNode rsNode = ((CursorNode) ast).getResultSetNode();
+		if (rsNode instanceof SelectNode) {
+			if (((SelectNode) rsNode).getFromList().isEmpty()) {
+				// if it is a sql about system info, such as select charset etc.
+				return routeToSingleNode(rrs, schema.getRandomDataNode(),stmt);
+			}
+		}
+		// standard SELECT operation
+		SelectParseInf parsInf = new SelectParseInf();
+		parsInf.ctx = new ShardingParseInfo();
+		SelectSQLAnalyser.analyse(parsInf, ast);
+		return tryRouteForTables(ast, true, rrs, schema, parsInf.ctx, stmt,cachePool);
+	}
+	private static RouteResultset routeChildTableInsert(SchemaConfig schema,TableConfig tc,QueryTreeNode ast,InsertParseInf parsInf,RouteResultset rrs,String stmt, LayerCachePool cachePool) throws SQLNonTransientException{
+		if (tc.isChildTable()) {
+			String joinKeyVal = parsInf.columnPairMap.get(tc.getJoinKey());
+			if (joinKeyVal == null) {
+				String inf = "joinKey not provided :" + tc.getJoinKey()+ "," + stmt;
+				LOGGER.warn(inf);
+				throw new SQLNonTransientException(inf);
+			}
+			// try to route by ER parent partion key
+			RouteResultset theRrs = routeByERParentKey(stmt, rrs, tc,joinKeyVal);
+			if (theRrs != null) {
+				return theRrs;
+			}
+
+			// route by sql query root parent's datanode
+			String findRootTBSql = tc.getLocateRTableKeySql()
+					.toLowerCase() + joinKeyVal;
+			if (LOGGER.isDebugEnabled()) {
+				LOGGER.debug("find root parent's node sql "+ findRootTBSql);
+			}
+			FetchStoreNodeOfChildTableHandler fetchHandler = new FetchStoreNodeOfChildTableHandler();
+			String dn = fetchHandler.execute(schema.getName(),findRootTBSql, tc.getRootParent().getDataNodes());
+			if (dn == null) {
+				throw new SQLNonTransientException("can't find (root) parent sharding node for sql:"+ stmt);
+			}
+			if (LOGGER.isDebugEnabled()) {
+				LOGGER.debug("found partion node for child table to insert "+ dn + " sql :" + stmt);
+			}
+			return routeToSingleNode(rrs, dn, stmt);
+		}
+		return null;
+	}
+	private static RouteResultset routeWithPartitionColumn(SchemaConfig schema,TableConfig tc,QueryTreeNode ast,InsertParseInf parsInf,RouteResultset rrs,String stmt, LayerCachePool cachePool) throws SQLNonTransientException{
+		String partColumn = tc.getPartitionColumn();
+		if (partColumn != null) {
+			String sharindVal = parsInf.columnPairMap.get(partColumn);
+			if (sharindVal != null) {
+				Set<ColumnRoutePair> col2Val = new HashSet<ColumnRoutePair>(1);
+				col2Val.add(new ColumnRoutePair(sharindVal));
+				return tryRouteForTable(ast, schema, rrs, false, stmt, tc, col2Val,null, cachePool);
+			} else {// must provide sharding_id when insert
+				String inf = "bad insert sql (sharding column:"+ partColumn + " not provided," + stmt;
+				LOGGER.warn(inf);
+				throw new SQLNonTransientException(inf);
+			}
+		}
+		return null;
+	}
+	private static RouteResultset routeNonGlobalInsert(SchemaConfig schema,TableConfig tc,QueryTreeNode ast,InsertParseInf parsInf,RouteResultset rrs,String stmt, LayerCachePool cachePool) throws SQLNonTransientException{
+		RouteResultset returnedSet=routeChildTableInsert(schema,tc,ast,parsInf,rrs,stmt,cachePool);
+		if(returnedSet!=null){
+			return returnedSet;
+		}
+		return routeWithPartitionColumn(schema,tc,ast,parsInf,rrs,stmt,cachePool);
+	}
+	private static RouteResultset routeInsert(SchemaConfig schema,QueryTreeNode ast,RouteResultset rrs,String stmt, LayerCachePool cachePool) throws SQLNonTransientException{
+		InsertParseInf parsInf = InsertSQLAnalyser.analyse(ast);
+		if (parsInf.columnPairMap.isEmpty()) {
+			String inf = "not supported inserq sql (columns not provided)," + stmt;
+			LOGGER.warn(inf);
+			throw new SQLNonTransientException(inf);
+		} else if (parsInf.fromQryNode != null) {
+			String inf = "not supported inserq sql (multi insert)," + stmt;
+			LOGGER.warn(inf);
+			throw new SQLNonTransientException(inf);
+		}
+		TableConfig tc = getTableConfig(schema, parsInf.tableName);
+		// if is global table，set rss global table flag
+		if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
+			rrs.setGlobalTable(true);
+		}else {// for partition table ,partion column must provided
+			RouteResultset returned=routeNonGlobalInsert(schema,tc,ast,parsInf,rrs,stmt, cachePool);
+			if(returned!=null){
+				return returned;
+			}
+		}
+		return tryRouteForTable(ast, schema, rrs, false, stmt, tc, null,null, cachePool);
+	}
+	private static RouteResultset routeUpdate(SchemaConfig schema,QueryTreeNode ast,RouteResultset rrs,String stmt, LayerCachePool cachePool) throws SQLNonTransientException{
+		UpdateParsInf parsInf = UpdateSQLAnalyser.analyse(ast);
+		// check if sharding columns is updated
+		TableConfig tc = getTableConfig(schema, parsInf.tableName);
+		// if is global table，set rss global table flag
+		if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
+			rrs.setGlobalTable(true);
+		}
+		if (parsInf.columnPairMap.containsKey(tc.getPartitionColumn())) {
+			throw new SQLNonTransientException("partion key can't be updated " + parsInf.tableName+ "->" + tc.getPartitionColumn());
+		} else if (parsInf.columnPairMap.containsKey(tc.getJoinKey())) {
+			// ,child and parent tables relation column can't be updated
+			throw new SQLNonTransientException("parent relation column can't be updated "+ parsInf.tableName + "->" + tc.getJoinKey());
+		}
+		if (parsInf.ctx == null) {// no where condtion
+			return tryRouteForTable(ast, schema, rrs, false, stmt, tc,null, null, cachePool);
+		} else if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE && 
+				    parsInf.ctx.tablesAndConditions.size() > 1) {
+			throw new SQLNonTransientException("global table not supported multi table related update "+ parsInf.tableName);
+		}
+		return tryRouteForTables(ast, false, rrs, schema, parsInf.ctx,stmt, cachePool);
+	}
+	private static RouteResultset routeDelete(SchemaConfig schema,QueryTreeNode ast,RouteResultset rrs,String stmt, LayerCachePool cachePool) throws SQLNonTransientException{
+		DeleteParsInf parsInf = DeleteSQLAnalyser.analyse(ast);
+		// if is global table，set rss global table flag
+		TableConfig tc = getTableConfig(schema, parsInf.tableName);
+		if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
+			rrs.setGlobalTable(true);
+		}
+		if (parsInf.ctx != null) {
+			return tryRouteForTables(ast, false, rrs, schema, parsInf.ctx,stmt, cachePool);
+		} else {// no where condtion
+			return tryRouteForTable(ast, schema, rrs, false, stmt, tc,null, null, cachePool);
+		}
+	}
+	private static RouteResultset routeDDL(SchemaConfig schema,QueryTreeNode ast,RouteResultset rrs,String stmt, LayerCachePool cachePool) throws SQLNonTransientException{
+		DDLParsInf parsInf = DDLSQLAnalyser.analyse(ast);
+		TableConfig tc = getTableConfig(schema, parsInf.tableName);
+
+		// if is global table，set rss global table flag
+		if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
+			rrs.setGlobalTable(true);
+		}
+
+		return routeToMultiNode(schema, false, false, ast, rrs,tc.getDataNodes(), stmt);
+	}
+	private static boolean processWithMycatSeq(SystemConfig sysConfig,
+			SchemaConfig schema, int sqlType, String origSQL, String charset,
+			ServerConnection sc, LayerCachePool cachePool){
+		// check if origSQL is with global sequence
+		// @micmiu it is just a simple judgement
+		if (origSQL.indexOf(" MYCATSEQ_") != -1) {
+			processSQL(sc,schema,origSQL,sqlType);
+			return true;
+		}
+		return false;
+	}
+	private static RouteResultset routeSystemInfo(SchemaConfig schema,int sqlType,String stmt,RouteResultset rrs) throws SQLSyntaxErrorException{
+		switch(sqlType){
+		case ServerParse.SHOW:// if origSQL is like show tables
 			return analyseShowSQL(schema, rrs, stmt);
-		}
-
-		// 判断是否是 select @@.. 之类的语句
-		if (sqlType == ServerParse.SELECT && stmt.contains("@@")) {
-			return analyseDoubleAtSgin(schema, rrs, stmt);
-		}
-
-		if (sqlType == ServerParse.DESCRIBE) {
-			// 判断是否是元数据SQL，如describe table
+		case ServerParse.SELECT://if origSQL is like select @@
+			if(stmt.contains("@@")){
+				return analyseDoubleAtSgin(schema, rrs, stmt);
+			}
+			break;
+		case ServerParse.DESCRIBE:// if origSQL is meta SQL, such as describe table
 			int ind = stmt.indexOf(' ');
 			return analyseDescrSQL(schema, rrs, stmt, ind + 1);
 		}
-		// 生成和展开AST
-		QueryTreeNode ast = SQLParserDelegate.parse(stmt,
-				charset == null ? "utf-8" : charset);
-
-		// Select SQL
-		if (ast.getNodeType() == NodeTypes.CURSOR_NODE) {
-			ResultSetNode rsNode = ((CursorNode) ast).getResultSetNode();
-			if (rsNode instanceof SelectNode) {
-				if (((SelectNode) rsNode).getFromList().isEmpty()) {
-					// 是否是系统相关的语句，select charaset等
-					return routeToSingleNode(rrs, schema.getRandomDataNode(),
-							stmt);
-				}
-			}
-			// 标准的SELECT表的操作
-			SelectParseInf parsInf = new SelectParseInf();
-			parsInf.ctx = new ShardingParseInfo();
-			SelectSQLAnalyser.analyse(parsInf, ast);
-			return tryRouteForTables(ast, true, rrs, schema, parsInf.ctx, stmt,
-					cachePool);
-
-		} else if (ast.getNodeType() == NodeTypes.INSERT_NODE) {
-			InsertParseInf parsInf = InsertSQLAnalyser.analyse(ast);
-			if (parsInf.columnPairMap.isEmpty()) {
-				String inf = "not supported inserq sql (columns not provided),"
-						+ stmt;
-				LOGGER.warn(inf);
-				throw new SQLNonTransientException(inf);
-			} else if (parsInf.fromQryNode != null) {
-				String inf = "not supported inserq sql (multi insert)," + stmt;
-				LOGGER.warn(inf);
-				throw new SQLNonTransientException(inf);
-			}
-			TableConfig tc = getTableConfig(schema, parsInf.tableName);
-			Set<ColumnRoutePair> col2Val = null;
-			String partColumn = null;
-			// if is global table，set rss global table flag
-			if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
-				rrs.setGlobalTable(true);
-			}
-
-			// for partition table ,partion column must provided
-			else {
-				if (tc.isChildTable()) {
-
-					String joinKeyVal = parsInf.columnPairMap.get(tc
-							.getJoinKey());
-					if (joinKeyVal == null) {
-						String inf = "joinKey not provided :" + tc.getJoinKey()
-								+ "," + stmt;
-						LOGGER.warn(inf);
-						throw new SQLNonTransientException(inf);
-					}
-					// try to route by ER parent partion key
-					RouteResultset theRrs = routeByERParentKey(stmt, rrs, tc,
-							joinKeyVal);
-					if (theRrs != null) {
-						return theRrs;
-					}
-
-					// route by sql query root parent's datanode
-					String findRootTBSql = tc.getLocateRTableKeySql()
-							.toLowerCase() + joinKeyVal;
-					if (LOGGER.isDebugEnabled()) {
-						LOGGER.debug("find root parent's node sql "
-								+ findRootTBSql);
-					}
-					FetchStoreNodeOfChildTableHandler fetchHandler = new FetchStoreNodeOfChildTableHandler();
-					String dn = fetchHandler.execute(schema.getName(),
-							findRootTBSql, tc.getRootParent().getDataNodes());
-					if (dn == null) {
-						throw new SQLNonTransientException(
-								"can't find (root) parent sharding node for sql:"
-										+ stmt);
-					}
-					if (LOGGER.isDebugEnabled()) {
-						LOGGER.debug("found partion node for child table to insert "
-								+ dn + " sql :" + stmt);
-					}
-					return routeToSingleNode(rrs, dn, stmt);
-				}
-				partColumn = tc.getPartitionColumn();
-				if (partColumn != null) {
-					col2Val = new HashSet<ColumnRoutePair>(1);
-					String sharindVal = parsInf.columnPairMap.get(partColumn);
-					if (sharindVal != null) {
-						col2Val.add(new ColumnRoutePair(sharindVal));
-					} else {// must provide sharding_id when insert
-						String inf = "bad insert sql (sharding column:"
-								+ partColumn + " not provided," + stmt;
-						LOGGER.warn(inf);
-						throw new SQLNonTransientException(inf);
-					}
-				}
-			}
-			return tryRouteForTable(ast, schema, rrs, false, stmt, tc, col2Val,
-					null, cachePool);
-		} else if (ast.getNodeType() == NodeTypes.UPDATE_NODE) {
-
-			UpdateParsInf parsInf = UpdateSQLAnalyser.analyse(ast);
-			// check if sharding columns is updated
-			TableConfig tc = getTableConfig(schema, parsInf.tableName);
-			// if is global table，set rss global table flag
-			if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
-				rrs.setGlobalTable(true);
-			}
-
-			if (parsInf.columnPairMap.containsKey(tc.getPartitionColumn())) {
-				throw new SQLNonTransientException(
-						"partion key can't be updated " + parsInf.tableName
-								+ "->" + tc.getPartitionColumn());
-			} else if (parsInf.columnPairMap.containsKey(tc.getJoinKey())) {
-				// ,child and parent tables relation column can't be updated
-				throw new SQLNonTransientException(
-						"parent relation column can't be updated "
-								+ parsInf.tableName + "->" + tc.getJoinKey());
-			}
-			if (parsInf.ctx == null) {// no where condtion
-				return tryRouteForTable(ast, schema, rrs, false, stmt, tc,
-						null, null, cachePool);
-			} else if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
-				if (parsInf.ctx.tablesAndConditions.size() > 1) {
-					throw new SQLNonTransientException(
-							"global table not supported multi table related update "
-									+ parsInf.tableName);
-				}
-			}
-
-			return tryRouteForTables(ast, false, rrs, schema, parsInf.ctx,
-					stmt, cachePool);
-
-		} else if (ast.getNodeType() == NodeTypes.DELETE_NODE) {
-			DeleteParsInf parsInf = DeleteSQLAnalyser.analyse(ast);
-			// if is global table，set rss global table flag
-			TableConfig tc = getTableConfig(schema, parsInf.tableName);
-			if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
-				rrs.setGlobalTable(true);
-			}
-			if (parsInf.ctx != null) {
-				return tryRouteForTables(ast, false, rrs, schema, parsInf.ctx,
-						stmt, cachePool);
-			} else {
-				// no where condtion
-				return tryRouteForTable(ast, schema, rrs, false, stmt, tc,
-						null, null, cachePool);
-			}
-
-		} else if (ast instanceof DDLStatementNode) {
-			DDLParsInf parsInf = DDLSQLAnalyser.analyse(ast);
-			TableConfig tc = getTableConfig(schema, parsInf.tableName);
-
-			// if is global table，set rss global table flag
-			if (tc.getTableType() == TableConfig.TYPE_GLOBAL_TABLE) {
-				rrs.setGlobalTable(true);
-			}
-
-			return routeToMultiNode(schema, false, false, ast, rrs,
-					tc.getDataNodes(), stmt);
-
+		return null;
+	}
+	private static RouteResultset routeNormalSqlWithAST(SchemaConfig schema,String stmt,RouteResultset rrs,String charset,LayerCachePool cachePool) throws SQLNonTransientException{
+		// to generate and expand AST
+		QueryTreeNode ast = SQLParserDelegate.parse(stmt,charset == null ? "utf-8" : charset);
+		switch(ast.getNodeType()){
+		case NodeTypes.CURSOR_NODE://select
+			return routeSelect(schema,ast,rrs,stmt, cachePool);
+		case NodeTypes.INSERT_NODE:
+			return routeInsert(schema,ast,rrs,stmt, cachePool);
+		case NodeTypes.UPDATE_NODE:
+			return routeUpdate(schema,ast,rrs,stmt, cachePool);
+		case NodeTypes.DELETE_NODE:
+			return routeDelete(schema,ast,rrs,stmt, cachePool);
+		}
+		if (ast instanceof DDLStatementNode) {
+			return routeDDL(schema,ast,rrs,stmt, cachePool);
 		} else {
-			LOGGER.info("TODO ,support sql type "
-					+ ast.getClass().getCanonicalName() + " ," + stmt);
+			LOGGER.info("TODO ,support sql type "+ ast.getClass().getCanonicalName() + " ," + stmt);
 			return rrs;
 		}
-
 	}
+	
 
 	/**
 	 * 根据 ER分片规则获取路由集合
@@ -532,7 +579,7 @@ public final class ServerRouterUtil {
 			}
 			stmt = stmt.substring(0, indx[0]) + " FROM " + tableName
 					+ stmt.substring(repPos[1]);
-			MetaRouter.routeForTableMeta(rrs, schema, tableName, stmt);
+			RouterUtil.routeForTableMeta(rrs, schema, tableName, stmt);
 			return rrs;
 
 		}
@@ -546,7 +593,7 @@ public final class ServerRouterUtil {
 				if (ind2 > 0) {
 					tableName = tableName.substring(ind2 + 1);
 				}
-				MetaRouter.routeForTableMeta(rrs, schema, tableName, stmt);
+				RouterUtil.routeForTableMeta(rrs, schema, tableName, stmt);
 				return rrs;
 			}
 		}
@@ -621,7 +668,7 @@ public final class ServerRouterUtil {
 		int[] repPos = { ind, 0 };
 		String tableName = getTableName(stmt, repPos);
 		stmt = stmt.substring(0, ind) + tableName + stmt.substring(repPos[1]);
-		MetaRouter.routeForTableMeta(rrs, schema, tableName, stmt);
+		RouterUtil.routeForTableMeta(rrs, schema, tableName, stmt);
 		return rrs;
 	}
 
@@ -1071,47 +1118,6 @@ public final class ServerRouterUtil {
 		return rrs;
 	}
 
-	/**
-	 * @ClassName: MetaRouter
-	 * @Description: (获取数据路由集合)
-	 * @author Mycat
-	 * @date 2014-2-20 下午4:18:46
-	 * 
-	 */
-
-	private static class MetaRouter {
-		public static void routeForTableMeta(RouteResultset rrs,
-				SchemaConfig schema, String tableName, String sql) {
-			String dataNode = getMetaReadDataNode(schema, tableName);
-			RouteResultsetNode[] nodes = new RouteResultsetNode[1];
-			nodes[0] = new RouteResultsetNode(dataNode, rrs.getSqlType(), sql);
-			rrs.setNodes(nodes);
-		}
-
-		/**
-		 * 根据标名随机获取一个节点
-		 * 
-		 * @param schema
-		 *            数据库名
-		 * @param table
-		 *            表名
-		 * @return 数据节点
-		 * @author mycat
-		 */
-		private static String getMetaReadDataNode(SchemaConfig schema,
-				String table) {
-			// Table名字被转化为大写的，存储在schema
-			table = table.toUpperCase();
-			String dataNode = null;
-			Map<String, TableConfig> tables = schema.getTables();
-			TableConfig tc;
-			if (tables != null && (tc = tables.get(table)) != null) {
-				dataNode = tc.getRandomDataNode();
-			}
-			return dataNode;
-		}
-	}
-
 	private static String getRandomDataNode(ArrayList<String> dataNodes) {
 		int index = Math.abs(rand.nextInt()) % dataNodes.size();
 		return dataNodes.get(index);
@@ -1204,33 +1210,109 @@ public final class ServerRouterUtil {
 	}
 
 	public static void main(String[] args) {
+		String sql="insert into customer (id,name,company_id,sharding_id)values(1,'wang',1,10000);";
+		boolean b=isPKInFields(sql, "ID", sql.indexOf('('), sql.indexOf(')'));
+		System.out.println(b);
+		
 		String origSQL="insert into user(name,code,password)values('name','code','password')";
 		int firstLeftBracketIndex = origSQL.indexOf("(") + 1;
 		int firstRightBracketIndex = origSQL.indexOf(")");
 		int lastLeftBracketIndex = origSQL.lastIndexOf("(") + 1;
-		String insertFieldsSQL = origSQL.substring(firstLeftBracketIndex, firstRightBracketIndex);
 		String tableName = StringUtil.getTableName(origSQL).toUpperCase();
-		String primaryKey="id";
+		String primaryKey="ID";
 		String newSQL=null;
 		long s=0;
+		
 		s=System.currentTimeMillis();
-		for(int i=0;i<1000_0000;i++){
+		for(int i=0;i<100_0000;i++){
 			int primaryKeyLength=primaryKey.length();
 			int insertSegOffset=firstLeftBracketIndex;
+			String mycatSeqPrefix="next value for MYCATSEQ_";
+			int mycatSeqPrefixLength=mycatSeqPrefix.length();
+			int tableNameLength=tableName.length();
 			StringBuilder newSQLBuilder=new StringBuilder(origSQL).insert(insertSegOffset,primaryKey);
+			
 			insertSegOffset+=primaryKeyLength;
 			newSQLBuilder.insert(insertSegOffset,',');
+			
 			insertSegOffset=lastLeftBracketIndex+primaryKeyLength+1;
-			String mycatSeqPrefix="next value for MYCATSEQ_";
 		    newSQLBuilder.insert(insertSegOffset,mycatSeqPrefix);
-		    insertSegOffset+=mycatSeqPrefix.length();
-		    newSQLBuilder.insert(insertSegOffset, tableName).insert(insertSegOffset+tableName.length(), ',');
+		    
+		    insertSegOffset+=mycatSeqPrefixLength;
+		    newSQLBuilder.insert(insertSegOffset, tableName).insert(insertSegOffset+tableNameLength, ',');
 			newSQL=newSQLBuilder.toString();
 		}
 		System.out.println(System.currentTimeMillis()-s);
 		System.out.println(newSQL);
+		
 		s=System.currentTimeMillis();
-		for(int i=0;i<1000_0000;i++){
+		for(int i=0;i<100_0000;i++){
+			int primaryKeyLength=primaryKey.length();
+			String mycatSeqPrefix="next value for MYCATSEQ_";
+			int mycatSeqPrefixLength=mycatSeqPrefix.length();
+			int tableNameLength=tableName.length();
+		
+			StringBuilder newSQLBuilder=new StringBuilder(
+					origSQL.length()+primaryKeyLength+mycatSeqPrefixLength+tableNameLength+4);//to prevent StringBuilder to expand capacity
+	
+			newSQLBuilder.append(origSQL,0,firstLeftBracketIndex)
+			             .append(primaryKey).append(',')
+			             .append(origSQL,firstLeftBracketIndex,lastLeftBracketIndex)
+			             .append(mycatSeqPrefix).append(tableName).append(',')
+			             .append(origSQL,lastLeftBracketIndex,origSQL.length());
+			newSQL=newSQLBuilder.toString();
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		System.out.println(newSQL);
+		
+		s=System.currentTimeMillis();
+		for(int i=0;i<100_0000;i++){
+			int primaryKeyLength=primaryKey.length();
+			int insertSegOffset=firstLeftBracketIndex;
+			String mycatSeqPrefix="next value for MYCATSEQ_";
+			int mycatSeqPrefixLength=mycatSeqPrefix.length();
+			int tableNameLength=tableName.length();
+			StringBuilder newSQLBuilder=new StringBuilder((origSQL.length()+primaryKeyLength+mycatSeqPrefixLength+tableNameLength+2)*2+2)//to prevent StringBuilder to expand capacity
+			                           .append(origSQL).insert(insertSegOffset,primaryKey);
+			
+			insertSegOffset+=primaryKeyLength;
+			newSQLBuilder.insert(insertSegOffset,',');
+			
+			insertSegOffset=lastLeftBracketIndex+primaryKeyLength+1;
+		    newSQLBuilder.insert(insertSegOffset,mycatSeqPrefix);
+		    
+		    insertSegOffset+=mycatSeqPrefixLength;
+		    newSQLBuilder.insert(insertSegOffset, tableName).insert(insertSegOffset+tableNameLength, ',');
+			newSQL=newSQLBuilder.toString();
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		System.out.println(newSQL);
+		
+		s=System.currentTimeMillis();
+		for(int i=0;i<100_0000;i++){
+			int primaryKeyLength=primaryKey.length();
+			int insertSegOffset=firstLeftBracketIndex;
+			String mycatSeqPrefix="next value for MYCATSEQ_";
+			int mycatSeqPrefixLength=mycatSeqPrefix.length();
+			int tableNameLength=tableName.length();
+			StringBuilder newSQLBuilder=new StringBuilder(origSQL.length()+primaryKeyLength+mycatSeqPrefixLength+tableNameLength+4)//to prevent StringBuilder to expand capacity
+			                           .append(origSQL).insert(insertSegOffset,primaryKey);
+			
+			insertSegOffset+=primaryKeyLength;
+			newSQLBuilder.insert(insertSegOffset,',');
+			
+			insertSegOffset=lastLeftBracketIndex+primaryKeyLength+1;
+		    newSQLBuilder.insert(insertSegOffset,mycatSeqPrefix);
+		    
+		    insertSegOffset+=mycatSeqPrefixLength;
+		    newSQLBuilder.insert(insertSegOffset, tableName).insert(insertSegOffset+tableNameLength, ',');
+			newSQL=newSQLBuilder.toString();
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		System.out.println(newSQL);
+		
+		s=System.currentTimeMillis();
+		for(int i=0;i<100_0000;i++){
 			newSQL=origSQL.substring(0, firstLeftBracketIndex)+
 				      primaryKey+','+
 				      origSQL.substring(firstLeftBracketIndex,lastLeftBracketIndex)+
@@ -1239,8 +1321,9 @@ public final class ServerRouterUtil {
 		}
 		System.out.println(System.currentTimeMillis()-s);
 		System.out.println(newSQL);
+		
 		s=System.currentTimeMillis();
-		for(int i=0;i<1000_0000;i++){
+		for(int i=0;i<100_0000;i++){
 			StringBuilder segSQL=new StringBuilder();
 			StringBuilder newSQLBuilder=new StringBuilder(origSQL).insert(firstLeftBracketIndex,segSQL.append(primaryKey).append(','));
 			segSQL.delete(0, segSQL.length());
@@ -1250,5 +1333,100 @@ public final class ServerRouterUtil {
 		System.out.println(System.currentTimeMillis()-s);
 		System.out.println(newSQL);
 		
+		s=System.currentTimeMillis();
+		for(int i=0;i<100_0000;i++){
+			int primaryKeyLength=primaryKey.length();
+			int insertSegOffset=firstLeftBracketIndex;
+			String mycatSeqPrefix="next value for MYCATSEQ_";
+			int mycatSeqPrefixLength=mycatSeqPrefix.length();
+			int tableNameLength=tableName.length();
+			char[] newSQLBuf=new char[origSQL.length()+primaryKeyLength+mycatSeqPrefixLength+tableNameLength+2];
+			
+			origSQL.getChars(0, firstLeftBracketIndex, newSQLBuf, 0);
+			primaryKey.getChars(0,primaryKeyLength,newSQLBuf,insertSegOffset);
+			insertSegOffset+=primaryKeyLength;
+			newSQLBuf[insertSegOffset]=',';
+			insertSegOffset++;
+			origSQL.getChars(firstLeftBracketIndex,lastLeftBracketIndex,newSQLBuf,insertSegOffset);
+			insertSegOffset+=lastLeftBracketIndex-firstLeftBracketIndex;
+			mycatSeqPrefix.getChars(0, mycatSeqPrefixLength, newSQLBuf, insertSegOffset);
+			insertSegOffset+=mycatSeqPrefixLength;
+			tableName.getChars(0,tableNameLength,newSQLBuf,insertSegOffset);
+			insertSegOffset+=tableNameLength;
+			newSQLBuf[insertSegOffset]=',';
+			insertSegOffset++;
+			origSQL.getChars(lastLeftBracketIndex, origSQL.length(), newSQLBuf, insertSegOffset);
+			newSQL=new String(newSQLBuf);
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		System.out.println(newSQL);
+		
+		s=System.currentTimeMillis();
+		for(int i=0;i<100_0000;i++){
+			StringBuilder sb = new StringBuilder();
+			sb.append(origSQL.substring(0, firstLeftBracketIndex));
+			sb.append(primaryKey);
+			sb.append(",");
+			sb.append(origSQL.substring(firstLeftBracketIndex,
+					lastLeftBracketIndex));
+			sb.append("next value for MYCATSEQ_");
+			sb.append(tableName);
+			sb.append(",");
+			sb.append(origSQL.substring(lastLeftBracketIndex,
+					origSQL.length()));
+			newSQL=sb.toString();
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		System.out.println(newSQL);
+
+		s=System.currentTimeMillis();
+		for(int i=0;i<10_0000;i++){
+			String insertFieldsSQL = origSQL.substring(
+					firstLeftBracketIndex, firstRightBracketIndex);
+			String[] insertFields = insertFieldsSQL.split(",");
+	
+			boolean isPrimaryKeyInFields = false;
+			for (String field : insertFields) {
+				if (field.toUpperCase().equals(primaryKey)) {
+					isPrimaryKeyInFields = true;
+					break;
+				}
+			}
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		
+		s=System.currentTimeMillis();
+		for(int i=0;i<10_0000;i++){
+			boolean result=false;
+			int pkOffset=0;
+			int primaryKeyLength=primaryKey.length();
+			String upperSQL=origSQL.substring(firstLeftBracketIndex,firstRightBracketIndex).toUpperCase();
+			do{
+				int pkStart=upperSQL.indexOf(primaryKey, pkOffset);
+				if(pkStart>=0 && pkStart<firstRightBracketIndex){
+					char pkSide=origSQL.charAt(pkStart-1);
+					if(pkSide<=' ' || pkSide=='`' || pkSide==',' || pkSide=='('){
+						pkSide=origSQL.charAt(pkStart+primaryKey.length());
+						result=pkSide<=' ' || pkSide=='`' || pkSide==',' || pkSide==')';
+					}
+				}else{
+					break;
+				}
+				pkOffset+=primaryKeyLength;
+			}while(!result);
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		
+		s=System.currentTimeMillis();
+		for(int i=0;i<100_0000;i++){
+			String upperSQL=origSQL.substring(17,35).toUpperCase();
+		}
+		System.out.println(System.currentTimeMillis()-s);
+		
+		s=System.currentTimeMillis();
+		for(int i=0;i<100_0000;i++){
+			String upperSQL=origSQL.toUpperCase();
+		}
+		System.out.println(System.currentTimeMillis()-s);
 	}
 }

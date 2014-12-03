@@ -37,6 +37,7 @@ import org.opencloudb.config.model.QuarantineConfig;
 import org.opencloudb.config.model.SchemaConfig;
 import org.opencloudb.config.model.SystemConfig;
 import org.opencloudb.config.model.UserConfig;
+import org.opencloudb.net.AbstractConnection;
 import org.opencloudb.util.TimeUtil;
 
 /**
@@ -70,12 +71,11 @@ public class MycatConfig {
 		this.users = confInit.getUsers();
 		this.schemas = confInit.getSchemas();
 		this.dataHosts = confInit.getDataHosts();
-		
+
 		this.dataNodes = confInit.getDataNodes();
-		for(PhysicalDBPool dbPool:dataHosts.values())
-		{
+		for (PhysicalDBPool dbPool : dataHosts.values()) {
 			dbPool.setSchemas(getDataNodeSchemasOfDataHost(dbPool.getHostName()));
-		}  
+		}
 		this.quarantine = confInit.getQuarantine();
 		this.cluster = confInit.getCluster();
 
@@ -89,24 +89,31 @@ public class MycatConfig {
 		return system;
 	}
 
-	public void setSocketParams(NetworkChannel channel,
-			boolean isFrontChannel) throws IOException {
+	public void setSocketParams(AbstractConnection con, boolean isFrontChannel)
+			throws IOException {
 		int sorcvbuf = 0;
 		int sosndbuf = 0;
-		int soNoDelay=0;
+		int soNoDelay = 0;
 		if (isFrontChannel) {
 			sorcvbuf = system.getFrontsocketsorcvbuf();
 			sosndbuf = system.getFrontsocketsosndbuf();
-			soNoDelay=system.getFrontSocketNoDelay();
+			soNoDelay = system.getFrontSocketNoDelay();
 		} else {
 			sorcvbuf = system.getBacksocketsorcvbuf();
 			sosndbuf = system.getBacksocketsosndbuf();
-			soNoDelay=system.getBackSocketNoDelay();
+			soNoDelay = system.getBackSocketNoDelay();
 		}
-
+		NetworkChannel channel=con.getChannel();
 		channel.setOption(StandardSocketOptions.SO_RCVBUF, sorcvbuf);
 		channel.setOption(StandardSocketOptions.SO_SNDBUF, sosndbuf);
-		channel.setOption(StandardSocketOptions.TCP_NODELAY, soNoDelay==1);
+		channel.setOption(StandardSocketOptions.TCP_NODELAY, soNoDelay == 1);
+		channel.setOption(StandardSocketOptions.SO_REUSEADDR, true);
+		channel.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
+		
+		con.setMaxPacketSize(system.getMaxPacketSize());
+		con.setPacketHeaderSize(system.getPacketHeaderSize());
+		con.setIdleTimeout(system.getIdleTimeout());
+		con.setCharset(system.getCharset());
 
 	}
 
@@ -129,16 +136,13 @@ public class MycatConfig {
 	public Map<String, PhysicalDBNode> getDataNodes() {
 		return dataNodes;
 	}
-	
-	public String[] getDataNodeSchemasOfDataHost(String dataHost)
-	{
-		ArrayList<String> schemas=new ArrayList<String>(30);
-		for(PhysicalDBNode dn:dataNodes.values())
-		{
-			 if(dn.getDbPool().getHostName().equals(dataHost))
-			 {
-				 schemas.add(dn.getDatabase());
-			 }
+
+	public String[] getDataNodeSchemasOfDataHost(String dataHost) {
+		ArrayList<String> schemas = new ArrayList<String>(30);
+		for (PhysicalDBNode dn : dataNodes.values()) {
+			if (dn.getDbPool().getHostName().equals(dataHost)) {
+				schemas.add(dn.getDatabase());
+			}
 		}
 		return schemas.toArray(new String[schemas.size()]);
 	}

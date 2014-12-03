@@ -313,7 +313,7 @@ public abstract class PhysicalDatasource {
 		}
 		ConQueue queue = conMap.getSchemaConQueue(schema);
 		queue.incExecuteCount();
-		//queue.incExecuteCount();
+		// queue.incExecuteCount();
 		conn.setAttachment(attachment);
 		handler.connectionAcquired(conn);
 		return conn;
@@ -376,6 +376,14 @@ public abstract class PhysicalDatasource {
 		}
 		// release connection
 		returnCon(c);
+	}
+
+	public void connectionClosed(BackendConnection conn) {
+		ConQueue queue = this.conMap.getSchemaConQueue(conn.getSchema());
+		if (queue != null) {
+			queue.removeCon(conn);
+		}
+
 	}
 
 	public abstract void createNewConnection(ResponseHandler handler,

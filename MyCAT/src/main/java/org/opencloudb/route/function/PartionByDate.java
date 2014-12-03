@@ -5,7 +5,6 @@ import java.text.SimpleDateFormat;
 
 import org.apache.log4j.Logger;
 import org.opencloudb.config.model.rule.RuleAlgorithm;
-import org.opencloudb.route.ServerRouterUtil;
 
 /**
  * 例子 按日期列分区  格式 between操作解析的范例
@@ -15,7 +14,7 @@ import org.opencloudb.route.ServerRouterUtil;
  */
 public class PartionByDate extends AbstractPartionAlgorithm implements RuleAlgorithm {
 	private static final Logger LOGGER = Logger
-			.getLogger(ServerRouterUtil.class);
+			.getLogger(PartionByDate.class);
 
 	private String sBeginDate;
 	private String sPartionDay;

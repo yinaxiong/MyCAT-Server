@@ -25,12 +25,10 @@ package org.opencloudb.net;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.AsynchronousSocketChannel;
-import java.nio.channels.CompletionHandler;
-import java.nio.channels.SelectionKey;
+import java.nio.channels.AsynchronousChannel;
+import java.nio.channels.NetworkChannel;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.log4j.Logger;
 import org.opencloudb.config.ErrorCode;
@@ -40,21 +38,25 @@ import org.opencloudb.util.TimeUtil;
  * @author mycat
  */
 public abstract class AbstractConnection implements NIOConnection {
+	protected String host;
+	protected int localPort;
+	protected int port;
+	protected long id;
+	protected volatile String charset;
 	protected static final Logger LOGGER = Logger
 			.getLogger(AbstractConnection.class);
-	protected final AsynchronousSocketChannel channel;
+	protected final NetworkChannel channel;
 	protected NIOProcessor processor;
 	protected NIOHandler handler;
-	protected SelectionKey processKey;
+
 	protected int packetHeaderSize;
 	protected int maxPacketSize;
 	protected volatile int readBufferOffset;
-	private volatile ByteBuffer readBuffer;
-	private volatile ByteBuffer writeBuffer;
-	private volatile boolean writing = false;
+	protected volatile ByteBuffer readBuffer;
+	protected volatile ByteBuffer writeBuffer;
 	// private volatile boolean writing = false;
 	protected final ConcurrentLinkedQueue<ByteBuffer> writeQueue = new ConcurrentLinkedQueue<ByteBuffer>();
-	protected boolean isRegistered;
+
 	protected final AtomicBoolean isClosed;
 	protected boolean isSocketClosed;
 	protected long startupTime;
@@ -63,26 +65,76 @@ public abstract class AbstractConnection implements NIOConnection {
 	protected long netInBytes;
 	protected long netOutBytes;
 	protected int writeAttempts;
-	private final ReentrantLock asynWriteCheckLock = new ReentrantLock();
-	private long idleTimeout;
-	private AIOReadHandler aioReadHandler = new AIOReadHandler();
-	private AIOWriteHandler aioWriteHandler = new AIOWriteHandler();
-	private final WriteEventCheckRunner writeEventChkRunner = new WriteEventCheckRunner();
 
-	public AbstractConnection(AsynchronousSocketChannel channel) {
+	private long idleTimeout;
+
+	private final SocketWR socketWR;
+
+	public AbstractConnection(NetworkChannel channel) {
 		this.channel = channel;
+		boolean isAIO = (channel instanceof AsynchronousChannel);
+		if (isAIO) {
+			socketWR = new AIOSocketWR(this);
+		} else {
+			socketWR = new NIOSocketWR(this);
+		}
 		this.isClosed = new AtomicBoolean(false);
 		this.startupTime = TimeUtil.currentTimeMillis();
 		this.lastReadTime = startupTime;
 		this.lastWriteTime = startupTime;
 	}
 
+	public String getCharset() {
+		return charset;
+	}
+
+	public boolean setCharset(String charset) {
+		this.charset = charset;
+		return true;
+	}
+
 	public long getIdleTimeout() {
 		return idleTimeout;
 	}
 
+	public SocketWR getSocketWR() {
+		return socketWR;
+	}
+
 	public void setIdleTimeout(long idleTimeout) {
 		this.idleTimeout = idleTimeout;
+	}
+
+	public int getLocalPort() {
+		return localPort;
+	}
+
+	public String getHost() {
+		return host;
+	}
+
+	public void setHost(String host) {
+		this.host = host;
+	}
+
+	public int getPort() {
+		return port;
+	}
+
+	public void setPort(int port) {
+		this.port = port;
+	}
+
+	public void setLocalPort(int localPort) {
+		this.localPort = localPort;
+	}
+
+	public long getId() {
+		return id;
+	}
+
+	public void setId(long id) {
+		this.id = id;
 	}
 
 	public boolean isIdleTimeout() {
@@ -91,7 +143,7 @@ public abstract class AbstractConnection implements NIOConnection {
 
 	}
 
-	public AsynchronousSocketChannel getChannel() {
+	public NetworkChannel getChannel() {
 		return channel;
 	}
 
@@ -180,19 +232,13 @@ public abstract class AbstractConnection implements NIOConnection {
 
 	}
 
-	public void asynRead() {
+	public void asynRead() throws IOException {
 
-		ByteBuffer theBuffer = readBuffer;
-		if (theBuffer == null) {
-			theBuffer = processor.getBufferPool().allocate();
-			this.readBuffer = theBuffer;
-			channel.read(theBuffer, this, aioReadHandler);
+		this.socketWR.asynRead();
+	}
 
-		} else if (theBuffer.hasRemaining()) {
-			channel.read(theBuffer, this, aioReadHandler);
-		} else {
-			throw new java.lang.IllegalArgumentException("full buffer to read ");
-		}
+	public void doNextWriteCheck() throws IOException {
+		this.socketWR.doNextWriteCheck();
 	}
 
 	public void onReadData(int got) throws IOException {
@@ -253,6 +299,7 @@ public abstract class AbstractConnection implements NIOConnection {
 		ByteBuffer buffer = allocate();
 		buffer = writeToBuffer(data, buffer);
 		write(buffer);
+
 	}
 
 	private final void writeNotSend(ByteBuffer buffer) {
@@ -265,44 +312,14 @@ public abstract class AbstractConnection implements NIOConnection {
 		// if ansyn write finishe event got lock before me ,then writing
 		// flag is set false but not start a write request
 		// so we check again
-		if (writing == false) {
-			doNextWriteCheck();
+		try {
+			this.socketWR.doNextWriteCheck();
+		} catch (Exception e) {
+			LOGGER.warn("write err:", e);
+			this.close("write err:" + e);
+
 		}
 
-	}
-
-	private void doNextWriteCheck() {
-		if (writing == false) {
-			if (!asynWriteCheckLock.isLocked()) {
-				try {
-					asynWriteCheckLock.lock();
-					if (writing) {
-						return;
-					}
-					ByteBuffer buffer = writeQueue.poll();
-					if (buffer != null) {
-						if (buffer.limit() == 0) {
-							this.recycle(buffer);
-							this.writeBuffer = null;
-							this.close("quit cmd");
-						} else {
-							writing = true;
-							writeBuffer = buffer;
-							asynWrite(buffer);
-						}
-					}
-				} finally {
-					asynWriteCheckLock.unlock();
-				}
-			} else {// next run a thread asyn check again
-				processor.getExecutor().execute(writeEventChkRunner);
-			}
-		}
-	}
-
-	private void asynWrite(ByteBuffer buffer) {
-		buffer.flip();
-		this.channel.write(buffer, this, aioWriteHandler);
 	}
 
 	public ByteBuffer checkWriteBuffer(ByteBuffer buffer, int capacity,
@@ -421,26 +438,6 @@ public abstract class AbstractConnection implements NIOConnection {
 		}
 	}
 
-	protected void onWriteFinished(int result) {
-		netOutBytes += result;
-		processor.addNetOutBytes(result);
-		lastWriteTime = TimeUtil.currentTimeMillis();
-
-		ByteBuffer theBuffer = writeBuffer;
-		if (theBuffer == null || !theBuffer.hasRemaining()) {// writeFinished,但要区分bufer是否NULL，不NULL，要回收
-			if (theBuffer != null) {
-				this.recycle(theBuffer);
-				writeBuffer = null;
-			}
-			this.writing = false;
-
-			this.doNextWriteCheck();
-		} else {
-			theBuffer.compact();
-			asynWrite(theBuffer);
-		}
-	}
-
 	public ConcurrentLinkedQueue<ByteBuffer> getWriteQueue() {
 		return writeQueue;
 	}
@@ -461,67 +458,4 @@ public abstract class AbstractConnection implements NIOConnection {
 		}
 	}
 
-	class WriteEventCheckRunner implements Runnable {
-		private volatile boolean running = false;
-
-		@Override
-		public void run() {
-			doNextWriteCheck();
-		}
-
-		public boolean isRunning() {
-			return running;
-		}
-	}
-
-}
-
-class AIOWriteHandler implements CompletionHandler<Integer, AbstractConnection> {
-
-	@Override
-	public void completed(final Integer result, final AbstractConnection con) {
-		try {
-			if (result >= 0) {
-				con.onWriteFinished(result);
-			} else {
-				con.close("write erro " + result);
-			}
-		} catch (Exception e) {
-			AbstractConnection.LOGGER.warn("caught aio process err:", e);
-		}
-
-	}
-
-	@Override
-	public void failed(Throwable exc, AbstractConnection con) {
-		con.close("write failed " + exc);
-	}
-
-}
-
-class AIOReadHandler implements CompletionHandler<Integer, AbstractConnection> {
-	@Override
-	public void completed(final Integer i, final AbstractConnection con) {
-		// con.getProcessor().getExecutor().execute(new Runnable() {
-		// public void run() {
-		if (i > 0) {
-			try {
-				con.onReadData(i);
-				con.asynRead();
-			} catch (IOException e) {
-				con.close("handle err:" + e);
-			}
-		} else if (i == -1) {
-			// System.out.println("read -1 xxxxxxxxx "+con);
-			con.close("client closed");
-		}
-		// }
-		// });
-	}
-
-	@Override
-	public void failed(Throwable exc, AbstractConnection con) {
-		con.close(exc.toString());
-
-	}
 }
